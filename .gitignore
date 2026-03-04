@@ -15,6 +15,10 @@ images/images_out/
 # Models cache (huge, managed by HuggingFace hub)
 # ~/.cache/huggingface/ — outside repo, not needed here
 
+# Claude config (personal, not shared)
+.claude/stack.yml
+.claude/settings.local.json
+
 # Dev
 .ruff_cache/
 .pytest_cache/

@@ -1,3 +1,5 @@
+@.claude/stack.yml
+
 # imageCLI
 
 Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev (fp8), and Stable Diffusion 3.5 Large Turbo backends via HuggingFace Diffusers.
