@@ -115,10 +115,10 @@ def generate(
         from imagecli.engine import get_engine_class
 
         ecls = get_engine_class(engine_name)
-        w = width or doc.width or cfg["width"]
-        h = height or doc.height or cfg["height"]
-        s = steps or doc.steps or cfg.get("steps") or ecls.default_steps
-        g = guidance or doc.guidance or cfg.get("guidance") or ecls.default_guidance
+        w = width if width is not None else (doc.width or cfg["width"])
+        h = height if height is not None else (doc.height or cfg["height"])
+        s = steps if steps is not None else (doc.steps or cfg.get("steps") or ecls.default_steps)
+        g = guidance if guidance is not None else (doc.guidance or cfg.get("guidance") or ecls.default_guidance)
         sd = seed if seed is not None else doc.seed
         neg = negative or doc.negative_prompt
         out_fmt = fmt or doc.format or cfg.get("format", "png")
@@ -129,10 +129,10 @@ def generate(
         from imagecli.engine import get_engine_class
 
         ecls = get_engine_class(engine_name)
-        w = width or cfg["width"]
-        h = height or cfg["height"]
-        s = steps or cfg.get("steps") or ecls.default_steps
-        g = guidance or cfg.get("guidance") or ecls.default_guidance
+        w = width if width is not None else cfg["width"]
+        h = height if height is not None else cfg["height"]
+        s = steps if steps is not None else (cfg.get("steps") or ecls.default_steps)
+        g = guidance if guidance is not None else (cfg.get("guidance") or ecls.default_guidance)
         sd = seed
         neg = negative
         out_fmt = fmt or cfg.get("format", "png")
@@ -163,6 +163,7 @@ def batch(
 
     console.print(f"Batch: {len(files)} prompt(s) found in {directory}")
 
+    from imagecli.engine import get_engine_class
     from imagecli.markdown import parse_prompt_file
 
     successes, failures = 0, 0
@@ -171,8 +172,6 @@ def batch(
         try:
             doc = parse_prompt_file(f)
             engine_name = engine or doc.engine or cfg["engine"]
-            from imagecli.engine import get_engine_class
-
             ecls = get_engine_class(engine_name)
             w = doc.width or cfg["width"]
             h = doc.height or cfg["height"]

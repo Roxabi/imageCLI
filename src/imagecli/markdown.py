@@ -39,7 +39,6 @@ def parse_prompt_file(path: Path) -> PromptDoc:
     m = _FRONTMATTER_RE.match(text)
     if m:
         fm_text = m.group(1)
-        body = text[m.end()].strip() if m.end() < len(text) else ""
         body = text[m.end() :].strip()
         if _HAS_YAML:
             frontmatter = yaml.safe_load(fm_text) or {}
