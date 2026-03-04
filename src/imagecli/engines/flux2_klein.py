@@ -8,10 +8,12 @@ from imagecli.engine import ImageEngine
 
 
 class Flux2KleinEngine(ImageEngine):
-    name = 'flux2-klein'
-    description = 'FLUX.2-klein-4B — best quality for 16GB VRAM (Black Forest Labs, Nov 2025)'
-    model_id = 'black-forest-labs/FLUX.2-klein-4B'
+    name = "flux2-klein"
+    description = "FLUX.2-klein-4B — best quality for 16GB VRAM (Black Forest Labs, Nov 2025)"
+    model_id = "black-forest-labs/FLUX.2-klein-4B"
     vram_gb = 13.0
+    default_steps = 28  # distilled model — fewer steps needed than dev
+    default_guidance = 3.5
 
     def __init__(self):
         self._pipe = None
@@ -22,19 +24,19 @@ class Flux2KleinEngine(ImageEngine):
         import torch
         from diffusers import Flux2KleinPipeline  # type: ignore[import-untyped]
 
-        print(f'Loading {self.model_id} …')
+        print(f"Loading {self.model_id} …")
         self._pipe = Flux2KleinPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
         self._pipe.enable_model_cpu_offload()
-        print('Model ready.')
+        print("Model ready.")
 
     def generate(
         self,
         prompt: str,
         *,
-        negative_prompt: str = '',
+        negative_prompt: str = "",
         width: int = 1024,
         height: int = 1024,
         steps: int = 50,
@@ -47,7 +49,7 @@ class Flux2KleinEngine(ImageEngine):
 
         self._load()
 
-        generator = torch.Generator('cuda').manual_seed(seed) if seed is not None else None
+        generator = torch.Generator("cuda").manual_seed(seed) if seed is not None else None
 
         result = self._pipe(
             prompt=prompt,

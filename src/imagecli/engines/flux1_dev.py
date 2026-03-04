@@ -8,10 +8,12 @@ from imagecli.engine import ImageEngine
 
 
 class Flux1DevEngine(ImageEngine):
-    name = 'flux1-dev'
-    description = 'FLUX.1-dev fp8 — top quality, ~10GB VRAM with quantization (Black Forest Labs)'
-    model_id = 'black-forest-labs/FLUX.1-dev'
+    name = "flux1-dev"
+    description = "FLUX.1-dev fp8 — top quality, ~10GB VRAM with quantization (Black Forest Labs)"
+    model_id = "black-forest-labs/FLUX.1-dev"
     vram_gb = 10.0
+    default_steps = 50
+    default_guidance = 3.5  # BFL recommendation for FLUX.1-dev
 
     def __init__(self):
         self._pipe = None
@@ -22,7 +24,7 @@ class Flux1DevEngine(ImageEngine):
         import torch
         from diffusers import FluxPipeline  # type: ignore[import-untyped]
 
-        print(f'Loading {self.model_id} (fp8) …')
+        print(f"Loading {self.model_id} (fp8) …")
         self._pipe = FluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
@@ -30,20 +32,21 @@ class Flux1DevEngine(ImageEngine):
         # fp8 quantize the transformer to save VRAM
         try:
             from optimum.quanto import freeze, qfloat8, quantize  # type: ignore[import-untyped]
+
             quantize(self._pipe.transformer, weights=qfloat8)
             freeze(self._pipe.transformer)
-            print('Transformer quantized to fp8.')
+            print("Transformer quantized to fp8.")
         except Exception as e:
-            print(f'Warning: fp8 quantization failed ({e}), using bf16.')
+            print(f"Warning: fp8 quantization failed ({e}), using bf16.")
 
         self._pipe.enable_model_cpu_offload()
-        print('Model ready.')
+        print("Model ready.")
 
     def generate(
         self,
         prompt: str,
         *,
-        negative_prompt: str = '',
+        negative_prompt: str = "",
         width: int = 1024,
         height: int = 1024,
         steps: int = 50,
@@ -56,7 +59,7 @@ class Flux1DevEngine(ImageEngine):
 
         self._load()
 
-        generator = torch.Generator('cuda').manual_seed(seed) if seed is not None else None
+        generator = torch.Generator("cuda").manual_seed(seed) if seed is not None else None
 
         result = self._pipe(
             prompt=prompt,

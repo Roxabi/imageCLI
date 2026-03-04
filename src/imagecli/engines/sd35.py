@@ -8,10 +8,12 @@ from imagecli.engine import ImageEngine
 
 
 class SD35Engine(ImageEngine):
-    name = 'sd35'
-    description = 'Stable Diffusion 3.5 Large Turbo — fast 20-step generation (Stability AI)'
-    model_id = 'stabilityai/stable-diffusion-3.5-large-turbo'
+    name = "sd35"
+    description = "Stable Diffusion 3.5 Large Turbo — fast 20-step generation (Stability AI)"
+    model_id = "stabilityai/stable-diffusion-3.5-large-turbo"
     vram_gb = 14.0
+    default_steps = 20  # turbo — fixed
+    default_guidance = 1.0  # turbo — CFG-free
 
     def __init__(self):
         self._pipe = None
@@ -22,7 +24,7 @@ class SD35Engine(ImageEngine):
         import torch
         from diffusers import StableDiffusion3Pipeline  # type: ignore[import-untyped]
 
-        print(f'Loading {self.model_id} …')
+        print(f"Loading {self.model_id} …")
         self._pipe = StableDiffusion3Pipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
@@ -30,20 +32,21 @@ class SD35Engine(ImageEngine):
         # quantize T5 text encoder (biggest VRAM hog in SD3.5) to fit in 16GB
         try:
             from optimum.quanto import freeze, qint8, quantize  # type: ignore[import-untyped]
+
             quantize(self._pipe.text_encoder_3, weights=qint8)
             freeze(self._pipe.text_encoder_3)
-            print('T5 encoder quantized to int8.')
+            print("T5 encoder quantized to int8.")
         except Exception as e:
-            print(f'Warning: T5 quantization failed ({e}), using bf16.')
+            print(f"Warning: T5 quantization failed ({e}), using bf16.")
 
         self._pipe.enable_model_cpu_offload()
-        print('Model ready.')
+        print("Model ready.")
 
     def generate(
         self,
         prompt: str,
         *,
-        negative_prompt: str = '',
+        negative_prompt: str = "",
         width: int = 1024,
         height: int = 1024,
         steps: int = 20,  # turbo is fixed at 20
@@ -56,7 +59,7 @@ class SD35Engine(ImageEngine):
 
         self._load()
 
-        generator = torch.Generator('cuda').manual_seed(seed) if seed is not None else None
+        generator = torch.Generator("cuda").manual_seed(seed) if seed is not None else None
 
         result = self._pipe(
             prompt=prompt,
@@ -64,7 +67,7 @@ class SD35Engine(ImageEngine):
             width=width,
             height=height,
             num_inference_steps=20,  # turbo is always 20
-            guidance_scale=1.0,      # turbo is CFG-free
+            guidance_scale=1.0,  # turbo is CFG-free
             generator=generator,
         )
         image = result.images[0]

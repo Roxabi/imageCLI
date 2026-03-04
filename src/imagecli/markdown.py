@@ -3,28 +3,23 @@
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib  # type: ignore[no-redef]
-
 try:
     import yaml  # type: ignore[import-untyped]
+
     _HAS_YAML = True
 except ImportError:
     _HAS_YAML = False
 
-_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 @dataclass
 class PromptDoc:
     prompt: str
-    negative_prompt: str = ''
+    negative_prompt: str = ""
     engine: str | None = None
     width: int | None = None
     height: int | None = None
@@ -36,7 +31,7 @@ class PromptDoc:
 
 
 def parse_prompt_file(path: Path) -> PromptDoc:
-    text = path.read_text(encoding='utf-8')
+    text = path.read_text(encoding="utf-8")
 
     frontmatter: dict = {}
     body = text
@@ -44,29 +39,29 @@ def parse_prompt_file(path: Path) -> PromptDoc:
     m = _FRONTMATTER_RE.match(text)
     if m:
         fm_text = m.group(1)
-        body = text[m.end()].strip() if m.end() < len(text) else ''
-        body = text[m.end():].strip()
+        body = text[m.end()].strip() if m.end() < len(text) else ""
+        body = text[m.end() :].strip()
         if _HAS_YAML:
             frontmatter = yaml.safe_load(fm_text) or {}
         else:
             # fallback: try key: value pairs
             for line in fm_text.splitlines():
-                if ':' in line:
-                    k, _, v = line.partition(':')
-                    frontmatter[k.strip()] = v.strip().strip('"\'')
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    frontmatter[k.strip()] = v.strip().strip("\"'")
 
-    prompt = frontmatter.pop('prompt', body).strip()
+    prompt = frontmatter.pop("prompt", body).strip()
 
     return PromptDoc(
         prompt=prompt,
-        negative_prompt=str(frontmatter.pop('negative_prompt', '')),
-        engine=frontmatter.pop('engine', None),
-        width=_int(frontmatter.pop('width', None)),
-        height=_int(frontmatter.pop('height', None)),
-        steps=_int(frontmatter.pop('steps', None)),
-        guidance=_float(frontmatter.pop('guidance', None)),
-        seed=_int(frontmatter.pop('seed', None)),
-        format=frontmatter.pop('format', None),
+        negative_prompt=str(frontmatter.pop("negative_prompt", "")),
+        engine=frontmatter.pop("engine", None),
+        width=_int(frontmatter.pop("width", None)),
+        height=_int(frontmatter.pop("height", None)),
+        steps=_int(frontmatter.pop("steps", None)),
+        guidance=_float(frontmatter.pop("guidance", None)),
+        seed=_int(frontmatter.pop("seed", None)),
+        format=frontmatter.pop("format", None),
         extra=frontmatter,
     )
 

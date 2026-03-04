@@ -11,16 +11,17 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore[no-redef]
 
-_FILENAME = 'imagecli.toml'
+_FILENAME = "imagecli.toml"
 _DEFAULTS: dict = {
-    'engine': 'flux2-klein',
-    'width': 1024,
-    'height': 1024,
-    'steps': 50,
-    'guidance': 4.0,
-    'output_dir': 'images/images_out',
-    'format': 'png',
-    'quality': 95,
+    "engine": "flux2-klein",
+    "width": 1024,
+    "height": 1024,
+    # steps and guidance are intentionally absent — each engine provides its own defaults
+    # via ImageEngine.default_steps / ImageEngine.default_guidance.
+    # Users can override globally in imagecli.toml [defaults] section.
+    "output_dir": "images/images_out",
+    "format": "png",
+    "quality": 95,
 }
 
 
@@ -40,16 +41,16 @@ def load_config() -> dict:
     path = _find_config()
     if path is None:
         warnings.warn(
-            f'{_FILENAME} not found — using built-in defaults. '
-            f'Copy imagecli.example.toml to {Path.home() / _FILENAME} to configure.',
+            f"{_FILENAME} not found — using built-in defaults. "
+            f"Copy imagecli.example.toml to {Path.home() / _FILENAME} to configure.",
             stacklevel=2,
         )
         return dict(_DEFAULTS)
 
-    with path.open('rb') as f:
+    with path.open("rb") as f:
         raw = tomllib.load(f)
 
     cfg = dict(_DEFAULTS)
-    cfg.update(raw.get('defaults', {}))
-    cfg['_config_path'] = str(path)
+    cfg.update(raw.get("defaults", {}))
+    cfg["_config_path"] = str(path)
     return cfg
