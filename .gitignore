@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+dist/
+*.egg-info/
+
+# Config (contains personal paths/preferences)
+imagecli.toml
+
+# Generated images
+images/images_out/
+
+# Models cache (huge, managed by HuggingFace hub)
+# ~/.cache/huggingface/ — outside repo, not needed here
+
+# Dev
+.ruff_cache/
+.pytest_cache/

@@ -1,0 +1,28 @@
+# imagecli.toml — user configuration
+# Copy to ~/imagecli.toml (or any parent of your working directory)
+# The CLI searches upward from CWD to $HOME for this file.
+
+[defaults]
+# Default engine: flux2-klein | flux1-dev | sd35
+engine = "flux2-klein"
+
+# Image dimensions (pixels) — must be multiples of 64
+width = 1024
+height = 1024
+
+# Inference steps
+# flux2-klein: 50 recommended  |  flux1-dev: 50  |  sd35: fixed at 20
+steps = 50
+
+# Guidance scale (classifier-free guidance strength)
+# flux2-klein: 4.0  |  flux1-dev: 3.5  |  sd35: 1.0 (turbo, CFG-free)
+guidance = 4.0
+
+# Output directory (relative to CWD, or absolute)
+output_dir = "images/images_out"
+
+# Output image format: png | jpg | webp
+format = "png"
+
+# JPEG/WebP quality (1-100, ignored for PNG)
+quality = 95
