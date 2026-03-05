@@ -16,7 +16,6 @@ images/images_out/
 # ~/.cache/huggingface/ — outside repo, not needed here
 
 # Claude config (personal, not shared)
-.claude/stack.yml
 .claude/settings.local.json
 
 # Dev
