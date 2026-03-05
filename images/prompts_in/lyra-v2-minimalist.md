@@ -2,7 +2,7 @@
 engine: flux2-klein
 width: 1024
 height: 1024
-steps: 50
+steps: 20
 guidance: 4.0
 negative_prompt: "blurry, noisy, cluttered, text, watermark"
 ---

@@ -2,6 +2,7 @@
 name = "imagecli"
 version = "0.1.0"
 description = "Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends"
+license = "MIT"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "typer[all]>=0.12",
@@ -39,6 +40,7 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
 torchvision = [{ index = "pytorch-cu128" }]
+diffusers = { git = "https://github.com/huggingface/diffusers.git" }
 
 [tool.uv]
 override-dependencies = [
@@ -55,4 +57,6 @@ pythonpath = ["src"]
 dev = [
     "ruff",
     "pytest",
+    "pre-commit>=4.5.1",
+    "pip-licenses>=5.5.1",
 ]

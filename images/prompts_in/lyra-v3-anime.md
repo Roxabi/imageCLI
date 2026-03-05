@@ -2,7 +2,7 @@
 engine: flux2-klein
 width: 896
 height: 1152
-steps: 50
+steps: 20
 guidance: 4.0
 negative_prompt: "ugly, deformed, bad anatomy, blurry, watermark, low quality, extra limbs"
 ---
