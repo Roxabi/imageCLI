@@ -35,11 +35,13 @@ def test_info_command_no_cuda():
     assert result.exit_code == 0
     # Should show config table regardless of GPU presence
     assert "engine" in result.output.lower() or "config" in result.output.lower()
+    # Verify the no-CUDA branch was actually reached
+    assert "no cuda" in result.output.lower() or "No CUDA GPU" in result.output
 
 
 def test_no_args_shows_help():
     result = runner.invoke(app, [])
-    # no_args_is_help=True causes Typer to exit with code 0 or 2
+    # Typer's no_args_is_help=True exits 0 (Click) or 2 (Typer CliRunner) depending on version
     assert result.exit_code in (0, 2)
     assert "generate" in result.output
     assert "batch" in result.output
@@ -111,8 +113,10 @@ def test_generate_with_engine_flag(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "test prompt", "-e", "flux1-dev"])
     assert result.exit_code == 0
+    # Signature: _run_generate(prompt, neg, engine_name, w, h, s, g, sd, fmt, out_path, ...)
+    # index:                       0      1       2       3  4  5  6   7    8       9
     args = mock_run.call_args
-    assert args[0][2] == "flux1-dev"  # engine_name
+    assert args[0][2] == "flux1-dev"  # index 2 = engine_name
 
 
 @patch("imagecli.cli._run_generate")
@@ -120,9 +124,11 @@ def test_generate_with_size_flags(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "test", "-W", "1280", "-H", "720"])
     assert result.exit_code == 0
+    # Signature: _run_generate(prompt, neg, engine_name, w, h, s, g, sd, fmt, out_path, ...)
+    # index:                       0      1       2       3  4  5  6   7    8       9
     args = mock_run.call_args
-    assert args[0][3] == 1280  # width
-    assert args[0][4] == 720  # height
+    assert args[0][3] == 1280  # index 3 = width
+    assert args[0][4] == 720  # index 4 = height
 
 
 @patch("imagecli.cli._run_generate")
@@ -137,4 +143,24 @@ def test_generate_md_file(mock_run, tmp_path: Path):
     assert result.exit_code == 0
     args = mock_run.call_args
     assert "test prompt" in args[0][0].lower()
-    assert args[0][2] == "flux1-dev"
+    assert args[0][2] == "flux1-dev"  # index 2 = engine_name
+
+
+@patch("imagecli.cli._run_generate")
+def test_generate_explicit_output(mock_run, tmp_path: Path):
+    mock_run.return_value = Path("/fake/output.png")
+    custom_out = tmp_path / "custom.png"
+    result = runner.invoke(app, ["generate", "test prompt", "-o", str(custom_out)])
+    assert result.exit_code == 0
+    # Signature: _run_generate(prompt, neg, engine_name, w, h, s, g, sd, fmt, out_path, ...)
+    # index:                       0      1       2       3  4  5  6   7    8       9
+    args = mock_run.call_args
+    assert args[0][9] == custom_out  # index 9 = out_path
+
+
+@patch("imagecli.cli._run_generate")
+def test_generate_no_compile(mock_run):
+    mock_run.return_value = Path("/fake/output.png")
+    result = runner.invoke(app, ["generate", "test prompt", "--no-compile"])
+    assert result.exit_code == 0
+    assert mock_run.call_args.kwargs["compile"] is False

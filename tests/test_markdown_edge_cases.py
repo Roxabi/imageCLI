@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+from unittest.mock import patch
 
 from imagecli.markdown import PromptDoc, parse_prompt_file
 
@@ -80,3 +80,14 @@ def test_format_field(tmp_path: Path):
     md.write_text("---\nformat: webp\n---\n\nPrompt.\n")
     doc = parse_prompt_file(md)
     assert doc.format == "webp"
+
+
+def test_yaml_unavailable_fallback(tmp_path: Path):
+    """The _HAS_YAML=False fallback parser must still extract key: value pairs."""
+    md = tmp_path / "fallback.md"
+    md.write_text("---\nengine: sd35\nwidth: 768\n---\n\nA sunset.\n")
+    with patch("imagecli.markdown._HAS_YAML", False):
+        doc = parse_prompt_file(md)
+    # Fallback parser returns raw strings (no type coercion for numeric fields)
+    assert doc.engine == "sd35"
+    assert "sunset" in doc.prompt.lower()

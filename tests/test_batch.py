@@ -23,9 +23,7 @@ def _make_md(path: Path, engine: str = "flux2-klein", prompt: str = "test prompt
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_discovers_md_files(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
-    mock_engine.cleanup = MagicMock()
-    mock_get_engine.return_value = mock_engine
+    mock_get_engine.return_value = MagicMock(cleanup=MagicMock())
     mock_run.return_value = Path("/fake/out.png")
 
     _make_md(tmp_path / "a.md")
@@ -53,6 +51,26 @@ def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
     assert result.exit_code == 0
     # Engine should only be created once for the same engine name
     mock_get_engine.assert_called_once()
+    # _run_generate must have been called once per file (3 files)
+    assert mock_run.call_count == 3
+    # All 3 calls must pass the same cached engine_instance
+    for call in mock_run.call_args_list:
+        assert call.kwargs["engine_instance"] is mock_engine
+
+
+@patch("imagecli.cli._run_generate")
+@patch("imagecli.engine.get_engine")
+def test_batch_no_compile(mock_get_engine, mock_run, tmp_path: Path):
+    mock_engine = MagicMock()
+    mock_engine.cleanup = MagicMock()
+    mock_get_engine.return_value = mock_engine
+    mock_run.return_value = Path("/fake/out.png")
+
+    _make_md(tmp_path / "a.md")
+
+    result = runner.invoke(app, ["batch", str(tmp_path), "--no-compile"])
+    assert result.exit_code == 0
+    mock_get_engine.assert_called_once_with("flux2-klein", compile=False)
 
 
 def test_batch_empty_dir(tmp_path: Path):
@@ -68,15 +86,11 @@ def test_batch_counts_failures(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
 
-    _make_md(tmp_path / "good.md")
-    _make_md(tmp_path / "bad.md")
+    _make_md(tmp_path / "good.md", prompt="good prompt")
+    _make_md(tmp_path / "bad.md", prompt="bad prompt")
 
-    call_count = 0
-
-    def side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:  # bad.md (sorted first alphabetically)
+    def side_effect(prompt, *args, **kwargs):
+        if "bad prompt" in prompt:
             raise RuntimeError("generation failed")
         return Path("/fake/out.png")
 
@@ -116,4 +130,23 @@ def test_batch_cleanup_called(mock_get_engine, mock_run, tmp_path: Path):
 
     result = runner.invoke(app, ["batch", str(tmp_path)])
     assert result.exit_code == 0
+    mock_engine.cleanup.assert_called_once()
+
+
+@patch("imagecli.cli._run_generate")
+@patch("imagecli.engine.get_engine")
+def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path):
+    mock_engine = MagicMock()
+    mock_engine.cleanup = MagicMock()
+    mock_get_engine.return_value = mock_engine
+    mock_run.side_effect = RuntimeError("all fail")
+
+    _make_md(tmp_path / "a.md")
+    _make_md(tmp_path / "b.md")
+
+    result = runner.invoke(app, ["batch", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "0 succeeded" in result.output
+    assert "2 failed" in result.output
+    # Cleanup must still be called even when all generations fail
     mock_engine.cleanup.assert_called_once()
