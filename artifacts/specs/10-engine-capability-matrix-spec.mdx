@@ -1,0 +1,170 @@
+---
+title: "feat: engine capability matrix / translate layer"
+issue: 10
+status: approved
+tier: F-lite
+promoted-from: artifacts/frames/10-engine-capability-matrix-frame.mdx
+date: 2026-03-06
+---
+
+## Context
+
+Promoted from approved frame `artifacts/frames/10-engine-capability-matrix-frame.mdx`.
+
+Source: issue #10 — imageCLI silently ignores unsupported parameters (e.g. `negative_prompt` on FLUX
+engines, custom `steps`/`guidance` on SD 3.5 Turbo) with no feedback to the user.
+
+## Goal
+
+Add an engine capability matrix and a warn-on-mismatch layer so users immediately know when
+a parameter they set will have no effect.
+
+## Users
+
+- **Primary:** users authoring `.md` prompt files or passing CLI flags with engine-specific params
+  (e.g. `negative_prompt: "blurry"` in a frontmatter combined with a FLUX engine).
+- **Secondary:** future engine contributors — the `EngineCapabilities` contract documents which
+  params must be declared for every new engine.
+
+## Expected Behavior
+
+A user runs:
+
+```bash
+imagecli generate "a cat" -n "blurry, ugly" -e flux2-klein
+```
+
+Before generation starts, a Rich warning is printed to stderr:
+
+```
+Warning: flux2-klein ignores negative_prompt (not supported by this engine).
+```
+
+Similarly:
+
+```bash
+imagecli generate "a cat" --steps 30 --guidance 7.5 -e sd35
+```
+
+Emits:
+
+```
+Warning: sd35 ignores steps (fixed at 20).
+Warning: sd35 ignores guidance (fixed at 1.0).
+```
+
+Warnings fire **only when the user explicitly set the parameter** — either via a CLI flag or in
+`.md` frontmatter. A parameter resolved from `imagecli.toml` config or from the hardcoded default
+does NOT trigger a warning. If the user does not pass `--steps`, no warning fires even if the
+engine ignores the config default.
+
+No warnings are emitted when:
+- A parameter the engine supports is provided (e.g. `--steps 30` on `flux2-klein`).
+- The user-provided value matches the engine's fixed value (e.g. `--guidance 0.0` on `flux1-schnell`).
+
+`imagecli engines` output gains capability columns showing which params each engine supports:
+
+```
+┌───────────────┬────────┬────────────┬──────────┬──────────┐
+│ Name          │  VRAM  │ Neg Prompt │ Steps    │ Guidance │
+│ flux2-klein   │  13GB  │ ✗          │ ✓        │ ✓        │
+│ flux1-dev     │  10GB  │ ✗          │ ✓        │ ✓        │
+│ flux1-schnell │  10GB  │ ✗          │ ✓        │ fixed 0.0│
+│ sd35          │  14GB  │ ✓          │ fixed 20 │ fixed 1.0│
+└───────────────┴────────┴────────────┴──────────┴──────────┘
+```
+
+Note: `flux1-schnell` steps are NOT fixed — the user CAN override the 4-step default. Only
+`guidance` is fixed at 0.0 for schnell (hardcoded in the model; non-zero guidance produces
+degraded output).
+
+## Design Decision — Distinguishing Explicit vs. Default Params
+
+`_run_generate()` in `cli.py` receives already-resolved values (e.g. `s = steps or cfg["steps"]`).
+Passing these resolved values to `warn_ignored_params` would fire spurious warnings when a config
+default happens to differ from an engine's fixed value.
+
+**Solution:** add two bool parameters to `_run_generate()`:
+- `steps_explicit: bool` — True if the user passed `--steps` on the CLI or set `steps:` in frontmatter
+- `guidance_explicit: bool` — True if the user passed `--guidance` on the CLI or set `guidance:` in frontmatter
+
+Derived before resolution:
+- In `generate`: `steps_explicit = steps is not None or doc.steps is not None`
+- In `batch`: `steps_explicit = doc.steps is not None`
+
+For `negative_prompt`: no bool needed — `neg != ""` is already the correct signal (empty string
+means not set).
+
+`warn_ignored_params` then only fires for steps/guidance when `*_explicit=True`.
+
+## Breadboard
+
+### Affordances
+
+| ID  | Element | Location | Handler / Data |
+|-----|---------|----------|----------------|
+| U1  | `EngineCapabilities` dataclass | `engine.py` | Fields: `negative_prompt: bool = True`, `fixed_steps: int \| None = None`, `fixed_guidance: float \| None = None` |
+| U2  | `ImageEngine.capabilities` class attr | `engine.py` | `ClassVar[EngineCapabilities]`; default: `EngineCapabilities()` (all supported, no fixed values) |
+| U3  | `warn_ignored_params(engine, neg, steps, guidance, *, steps_explicit, guidance_explicit)` | `engine.py` | Prints Rich warnings to stderr; co-located with `preflight_check`; imported by `cli.py` |
+| U4  | `_run_generate(…, steps_explicit, guidance_explicit)` call site | `cli.py` | Calls U3 before `engine.generate()`; both `generate` and `batch` commands pass explicit-flags through this shared path |
+| U5  | `list_engines()` return value | `engine.py` | Each dict: `{name, description, model_id, vram_gb, capabilities: {negative_prompt: bool, fixed_steps: int\|None, fixed_guidance: float\|None}}` |
+| U6  | `engines` CLI command table | `cli.py` | Adds "Neg Prompt", "Steps", "Guidance" columns; renders `✗`/`✓`/`fixed N` from U5 capabilities dict |
+
+### Wiring
+
+```
+CLI: generate / batch
+  └─ _run_generate(neg, steps, guidance, steps_explicit, guidance_explicit, engine)
+       ├─ get_engine(name)                     → ImageEngine (has .capabilities)
+       ├─ warn_ignored_params(engine, neg,      → Rich stderr warnings (U3)
+       │     steps, guidance,
+       │     steps_explicit, guidance_explicit)
+       └─ engine.generate(...)                 → unchanged
+
+CLI: engines
+  └─ list_engines()                            → includes capabilities dict (U5)
+       └─ Rich table with capability columns (U6)
+```
+
+Both `generate` and `batch` flow through `_run_generate` — no separate wiring needed for batch.
+Batch derives `steps_explicit = doc.steps is not None` from frontmatter before calling `_run_generate`.
+
+## Slices
+
+| # | Slice | Files | Demoed by |
+|---|-------|-------|-----------|
+| 1 | Define `EngineCapabilities` + declare on all 4 engines | `engine.py`, `engines/flux2_klein.py`, `engines/flux1_dev.py`, `engines/flux1_schnell.py`, `engines/sd35.py` | `engine.capabilities` accessible on each class; correct values per engine |
+| 2 | `warn_ignored_params()` + `_run_generate()` explicit flags | `engine.py`, `cli.py` | `imagecli generate "cat" -n "ugly" -e flux2-klein` prints warning; no warning when using config defaults |
+| 3 | Update `list_engines()` + `engines` CLI table | `engine.py`, `cli.py` | `imagecli engines` shows capability columns |
+
+## Implementation Notes
+
+- `engine.py` already has `from __future__ import annotations`; add `from typing import ClassVar` for the base class attribute.
+- `warn_ignored_params` lives in `engine.py` alongside `preflight_check` (same pattern: utility called by `cli.py`). Do not put it in `cli.py` — keeps the capability contract co-located with the base class.
+- `flux1-schnell` declares `EngineCapabilities(negative_prompt=False, fixed_guidance=0.0)`. `fixed_steps` stays `None` because users CAN pass a different step count; only guidance is hardcoded.
+- Warning output uses Rich's stderr console: `Console(stderr=True).print(f"[yellow]Warning:[/yellow] …")`.
+
+## Success Criteria
+
+- [ ] `EngineCapabilities` dataclass in `engine.py` with fields `negative_prompt: bool = True`, `fixed_steps: int | None = None`, `fixed_guidance: float | None = None`
+- [ ] `ImageEngine` base class declares `capabilities: ClassVar[EngineCapabilities] = EngineCapabilities()` (all supported, no fixed values)
+- [ ] `flux2-klein` declares `capabilities = EngineCapabilities(negative_prompt=False)`
+- [ ] `flux1-dev` declares `capabilities = EngineCapabilities(negative_prompt=False)`
+- [ ] `flux1-schnell` declares `capabilities = EngineCapabilities(negative_prompt=False, fixed_guidance=0.0)` — `fixed_steps` is NOT set (steps remain user-configurable)
+- [ ] `sd35` declares `capabilities = EngineCapabilities(fixed_steps=20, fixed_guidance=1.0)` — `negative_prompt` stays True (sd35 does support it)
+- [ ] `_run_generate()` accepts `steps_explicit: bool` and `guidance_explicit: bool` parameters
+- [ ] `generate` command derives `steps_explicit = steps is not None or doc.steps is not None` (or `steps is not None` for plain-text prompt path)
+- [ ] `batch` command derives `steps_explicit = doc.steps is not None` per file
+- [ ] `imagecli generate "cat" -n "ugly" -e flux2-klein` prints a warning about `negative_prompt` being ignored
+- [ ] `imagecli generate "cat" -n "ugly" -e flux1-schnell` prints a warning about `negative_prompt` being ignored
+- [ ] `imagecli generate "cat" --steps 30 -e sd35` prints a warning about `steps` being fixed at 20
+- [ ] `imagecli generate "cat" --guidance 7.5 -e sd35` prints a warning about `guidance` being fixed at 1.0
+- [ ] `imagecli generate "cat" --guidance 7.5 -e flux1-schnell` prints a warning about `guidance` being fixed at 0.0
+- [ ] `imagecli generate "cat" --steps 30 -e flux2-klein` does NOT print any warning (steps supported)
+- [ ] `imagecli generate "cat" --guidance 0.0 -e flux1-schnell` does NOT print any warning (value matches fixed)
+- [ ] `imagecli generate "cat" -e sd35` (no `--steps` flag) does NOT print any warning (steps not explicitly set)
+- [ ] A `.md` file with `negative_prompt: "blurry"` run via `imagecli batch` with `flux2-klein` prints the negative_prompt warning
+- [ ] `imagecli engines` table includes "Neg Prompt", "Steps", and "Guidance" columns with correct values per engine
+- [ ] `list_engines()` return dicts include a `capabilities` key with shape `{negative_prompt: bool, fixed_steps: int|None, fixed_guidance: float|None}`
+- [ ] Unit tests cover `warn_ignored_params()` for all warning and no-warning cases (including `steps_explicit=False` suppression)
+- [ ] All existing tests pass
