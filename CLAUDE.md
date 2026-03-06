@@ -9,7 +9,7 @@ Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev, FL
 - Python 3.12, managed with `uv`
 - CLI framework: Typer + Rich
 - Inference: HuggingFace `diffusers` + `optimum[quanto]` for fp8/int8 quantization
-- GPU: PyTorch 2.7+ cu128 for RTX 5070 Ti (Blackwell sm_120, 16GB GDDR7)
+- GPU: PyTorch 2.7+ cu128 for RTX 5070 Ti (Blackwell sm_120, 16GB GDDR7); int8 fallback for Ampere (RTX 3080, sm_86)
 - Linting: `ruff` (line-length 100, target py312)
 
 ## Engines
@@ -17,8 +17,8 @@ Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev, FL
 | Engine | Model | VRAM | Notes |
 |---|---|---|---|
 | `flux2-klein` | FLUX.2-klein-4B | ~13GB | Default. Best quality/VRAM ratio. Black Forest Labs Nov 2025 |
-| `flux1-dev` | FLUX.1-dev | ~10GB | fp8 quantized via optimum-quanto. Excellent quality |
-| `flux1-schnell` | FLUX.1-schnell | ~10GB | fp8 quantized. Apache 2.0, ungated. Fast 4-step generation |
+| `flux1-dev` | FLUX.1-dev | ~10GB | fp8 (sm≥89) or int8 (Ampere) via optimum-quanto. Excellent quality |
+| `flux1-schnell` | FLUX.1-schnell | ~10GB | fp8/int8 quantized. Apache 2.0, ungated. Fast 4-step generation |
 | `sd35` | SD3.5 Large Turbo | ~14GB | Fast 20-step CFG-free. T5 encoder quantized to int8 |
 
 ## Project Layout
@@ -35,8 +35,8 @@ src/imagecli/
   markdown.py             — YAML frontmatter parser for .md prompt files
   engines/
     flux2_klein.py        — FLUX.2-klein-4B engine (default)
-    flux1_dev.py          — FLUX.1-dev fp8 quantized engine
-    flux1_schnell.py      — FLUX.1-schnell fp8 quantized engine
+    flux1_dev.py          — FLUX.1-dev quantized engine (fp8 on sm≥89, int8 on Ampere)
+    flux1_schnell.py      — FLUX.1-schnell quantized engine (fp8 on sm≥89, int8 on Ampere)
     sd35.py               — SD3.5 Large Turbo engine
 ```
 
@@ -119,13 +119,43 @@ Priority: **CLI flag > .md frontmatter > imagecli.toml > hardcoded default**
 - Engines are lazy-loaded — model loaded in `_load()` on first `generate()` call, not on import
 - Engine registry in `engine.py:_get_registry()` — add new engines there
 - `enable_model_cpu_offload()` used on all engines to handle VRAM pressure
-- fp8 quantization via `optimum-quanto` (FLUX.1-dev/schnell transformer, SD3.5 T5 encoder)
+- Adaptive quantization via `optimum-quanto`: fp8 on sm≥89 (Ada/Blackwell), int8 on Ampere (sm≥80). SD3.5 T5 always int8.
+- `_get_compute_capability()` in `engine.py` detects GPU architecture for quantization selection
 - `preflight_check()` runs before `_load()` — abort early rather than OOM mid-load
 - `cleanup()` always runs in `finally` after generation (even on failure)
 - `_optimize_pipe()` called once inside `_load()`; `_compiled` flag prevents double-compile
 - Batch mode caches engine instances — one model load per engine across all files in the batch
 - Output files never overwrite existing ones — suffix `_1`, `_2` etc. added automatically
 - FLUX.2-klein is always the default (best quality-to-VRAM ratio for 16GB)
+
+## Benchmark
+
+Run these to record real VRAM and wall-clock numbers. Each generation prints `Peak VRAM (inference): X.XX GB` automatically.
+
+```bash
+# Smoke test (one image per engine)
+imagecli generate "a white cat on a red chair" -e flux2-klein --seed 42
+imagecli generate "a white cat on a red chair" -e flux1-dev   --seed 42
+imagecli generate "a white cat on a red chair" -e flux1-schnell --seed 42
+imagecli generate "a white cat on a red chair" -e sd35        --seed 42
+
+# Full batch benchmark
+imagecli batch images/prompts_in/ -e flux2-klein  --output-dir images/images_out/benchmark/klein
+imagecli batch images/prompts_in/ -e flux1-dev    --output-dir images/images_out/benchmark/dev
+imagecli batch images/prompts_in/ -e flux1-schnell --output-dir images/images_out/benchmark/schnell
+imagecli batch images/prompts_in/ -e sd35         --output-dir images/images_out/benchmark/sd35
+```
+
+GPU support matrix:
+
+| Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
+|---|---|---|
+| `flux2-klein` | ✓ bf16 | ✗ too large (~13GB) |
+| `flux1-dev` | ✓ fp8 | ✓ int8 |
+| `flux1-schnell` | ✓ fp8 | ✓ int8 |
+| `sd35` | ✓ int8 T5 | ✗ too large (~14GB) |
+
+After running, update the Engines table above with real VRAM peaks from `imagecli info` + generation output.
 
 ## Conventions
 

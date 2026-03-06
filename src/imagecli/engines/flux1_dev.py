@@ -1,13 +1,13 @@
-"""FLUX.1-dev engine — fp8 quantized, excellent quality at ~10GB VRAM."""
+"""FLUX.1-dev engine — quantized (fp8 on sm≥89, int8 on Ampere), ~10GB VRAM."""
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine
+from imagecli.engine import ImageEngine, get_compute_capability
 
 
 class Flux1DevEngine(ImageEngine):
     name = "flux1-dev"
-    description = "FLUX.1-dev fp8 — top quality, ~10GB VRAM with quantization (Black Forest Labs)"
+    description = "FLUX.1-dev quantized — top quality, ~10GB VRAM (Black Forest Labs)"
     model_id = "black-forest-labs/FLUX.1-dev"
     vram_gb = 10.0
 
@@ -17,20 +17,14 @@ class Flux1DevEngine(ImageEngine):
         import torch
         from diffusers import FluxPipeline  # type: ignore[import-untyped]
 
-        print(f"Loading {self.model_id} (fp8) …")
+        sm = get_compute_capability()
+        qtype_label = "fp8" if sm >= (8, 9) else "int8"
+        print(f"Loading {self.model_id} ({qtype_label}) …")
         self._pipe = FluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
-        # fp8 quantize the transformer to save VRAM
-        try:
-            from optimum.quanto import freeze, qfloat8, quantize  # type: ignore[import-untyped]
-
-            quantize(self._pipe.transformer, weights=qfloat8)
-            freeze(self._pipe.transformer)
-            print("Transformer quantized to fp8.")
-        except Exception as e:
-            print(f"Warning: fp8 quantization failed ({e}), using bf16.")
-
+        actual_qtype = self._quantize_transformer(self._pipe, sm)
+        print(f"Transformer quantized to {actual_qtype}.")
         self._finalize_load(self._pipe)
         print("Model ready.")

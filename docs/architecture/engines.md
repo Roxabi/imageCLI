@@ -19,13 +19,15 @@ preflight_check(engine)          (called by CLI before first generate)
 generate(prompt, ..., output_path)
   ├── _load()                    (idempotent — returns early if already loaded)
   │     ├── import torch, diffusers
+  │     ├── _get_compute_capability() → (major, minor)
   │     ├── Pipeline.from_pretrained(model_id, torch_dtype=bfloat16)
-  │     ├── quantize(transformer, weights=qfloat8)  [fp8 engines only]
-  │     ├── freeze(transformer)                     [fp8 engines only]
+  │     ├── quantize(transformer, qfloat8 if sm≥(8,9) else qint8)  [FLUX engines]
+  │     ├── freeze(transformer)
   │     ├── pipe.enable_model_cpu_offload(gpu_id=0)
   │     ├── torch.cuda.set_per_process_memory_fraction(0.85)
   │     └── _optimize_pipe(pipe)
   ├── build Generator from seed (optional)
+  ├── torch.cuda.reset_peak_memory_stats()
   ├── torch.inference_mode()
   ├── pipe(prompt, width, height, steps, guidance, generator)
   └── image.save(output_path)
@@ -45,6 +47,10 @@ Defined in `src/imagecli/engine.py`.
 
 - `_optimize_pipe(pipe, compile=True)` — applies TF32 matmul precision, VAE tiling/slicing, and `torch.compile` on the transformer or unet. Compile mode is `max-autotune-no-cudagraphs` (safe for variable input shapes). Compilation is skipped after the first call (`_compiled` flag).
 - `cleanup()` — frees VRAM cache and triggers Python GC.
+
+**Module-level helpers:**
+
+- `_get_compute_capability()` — returns `(major, minor)` for GPU 0, or `(0, 0)` if CUDA unavailable. Used by FLUX engines to select quantization precision at load time.
 
 **Class attributes every engine must set:**
 
@@ -83,12 +89,38 @@ Defined in `src/imagecli/engine.py`.
 
 ## Quantization Patterns
 
-- **fp8** (FLUX.1-dev, FLUX.1-schnell): `optimum.quanto.quantize(pipe.transformer, weights=qfloat8)`
-- **int8** (SD3.5 T5 encoder): `optimum.quanto.quantize(pipe.text_encoder_3, weights=qint8)`
-- **None** (FLUX.2-klein): runs in native bf16, fits in 13 GB without quantization
+Quantization type is selected at load time based on GPU compute capability:
+
+| GPU arch | sm | FLUX transformer | SD3.5 T5 |
+|---|---|---|---|
+| Blackwell / Ada Lovelace | ≥ (8,9) | fp8 (`qfloat8`) | int8 |
+| Ampere (RTX 3080/3090) | (8,x) | int8 (`qint8`) | int8 |
+| No CUDA / older | (0,0) | bf16 fallback | bf16 fallback |
+
+- **fp8** requires sm≥89 (Ada Lovelace, Blackwell) — native hardware support
+- **int8** works on Ampere (sm_80+) and newer — halves VRAM vs bf16
+- **FLUX.2-klein**: always bf16, no quantization needed at 13 GB
+- **SD3.5 T5 encoder**: always int8 regardless of GPU
 
 Always call `freeze(component)` after `quantize()` and before `enable_model_cpu_offload()`.
 Wrap quantization in try/except and fall back to bf16 with a warning.
+
+## GPU Support Matrix
+
+| Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
+|---|---|---|
+| `flux2-klein` | ✓ bf16 | ✗ too large (~13GB) |
+| `flux1-dev` | ✓ fp8 | ✓ int8 |
+| `flux1-schnell` | ✓ fp8 | ✓ int8 |
+| `sd35` | ✓ int8 T5 | ✗ too large (~14GB) |
+
+## VRAM Measurement
+
+`generate()` calls `torch.cuda.reset_peak_memory_stats()` before inference so that
+`torch.cuda.max_memory_allocated()` reflects only the inference pass, not model loading.
+The CLI reads this value after each generation and prints `Peak VRAM (inference): X.XX GB`.
+
+Use `imagecli info` to see total GPU VRAM and compute capability (`sm_XX (Arch)`).
 
 ## Pipeline Flow
 

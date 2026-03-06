@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -37,6 +37,26 @@ def test_info_command_no_cuda():
     assert "engine" in result.output.lower() or "config" in result.output.lower()
     # Verify the no-CUDA branch was actually reached
     assert "no cuda" in result.output.lower() or "No CUDA GPU" in result.output
+
+
+def test_info_command_shows_compute_capability():
+    # Arrange: mock an Ampere RTX 3080 (sm_86) with 10 GB VRAM.
+    mock_props = MagicMock()
+    mock_props.name = "NVIDIA GeForce RTX 3080"
+    mock_props.total_memory = 10 * 1024**3
+    mock_props.major = 8
+    mock_props.minor = 6
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_properties", return_value=mock_props),
+    ):
+        # Act
+        result = runner.invoke(app, ["info"])
+    # Assert: GPU name, SM string, and architecture label all appear in output.
+    assert result.exit_code == 0
+    assert "RTX 3080" in result.output
+    assert "sm_86" in result.output
+    assert "Ampere" in result.output
 
 
 def test_no_args_shows_help():
@@ -164,3 +184,32 @@ def test_generate_no_compile(mock_run):
     result = runner.invoke(app, ["generate", "test prompt", "--no-compile"])
     assert result.exit_code == 0
     assert mock_run.call_args.kwargs["compile"] is False
+
+
+# ── _run_generate — Peak VRAM display ───────────────────────────────────────
+
+
+def test_generate_shows_peak_vram(tmp_path: Path):
+    # Arrange: a fake engine that returns a valid output path, with CUDA reporting
+    # 8.5 GB peak reserved memory.
+    fake_img = tmp_path / "out.png"
+    fake_img.touch()
+
+    mock_engine = MagicMock()
+    mock_engine.name = "flux2-klein"
+    mock_engine.description = "test engine"
+    mock_engine.generate.return_value = fake_img
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.max_memory_reserved", return_value=int(8.5 * 1024**3)),
+    ):
+        # Act
+        result = runner.invoke(app, ["generate", "test prompt", "--output-dir", str(tmp_path)])
+
+    # Assert: peak VRAM line is printed with the expected value.
+    assert result.exit_code == 0
+    assert "Peak VRAM reserved" in result.output
+    assert "8.50 GB" in result.output

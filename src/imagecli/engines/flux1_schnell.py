@@ -1,15 +1,13 @@
-"""FLUX.1-schnell engine — Apache 2.0, ungated, fast generation at ~10GB VRAM (fp8)."""
+"""FLUX.1-schnell engine — Apache 2.0, ungated, fast 4-step generation at ~10GB VRAM."""
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine
+from imagecli.engine import ImageEngine, get_compute_capability
 
 
 class Flux1SchnellEngine(ImageEngine):
     name = "flux1-schnell"
-    description = (
-        "FLUX.1-schnell fp8 — Apache 2.0, fast 4-step generation, ~10GB VRAM (Black Forest Labs)"
-    )
+    description = "FLUX.1-schnell quantized — Apache 2.0, fast 4-step generation, ~10GB VRAM (Black Forest Labs)"
     model_id = "black-forest-labs/FLUX.1-schnell"
     vram_gb = 10.0
 
@@ -19,21 +17,15 @@ class Flux1SchnellEngine(ImageEngine):
         import torch
         from diffusers import FluxPipeline
 
-        print(f"Loading {self.model_id} (fp8) …")
+        sm = get_compute_capability()
+        qtype_label = "fp8" if sm >= (8, 9) else "int8"
+        print(f"Loading {self.model_id} ({qtype_label}) …")
         self._pipe = FluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
-        # fp8 quantize the transformer to fit in 16GB cards
-        try:
-            from optimum.quanto import freeze, qfloat8, quantize  # type: ignore[import-untyped]
-
-            quantize(self._pipe.transformer, weights=qfloat8)
-            freeze(self._pipe.transformer)
-            print("Transformer quantized to fp8.")
-        except Exception as e:
-            print(f"Warning: fp8 quantization failed ({e}), using bf16.")
-
+        actual_qtype = self._quantize_transformer(self._pipe, sm)
+        print(f"Transformer quantized to {actual_qtype}.")
         self._finalize_load(self._pipe)
         print("Model ready.")
 

@@ -84,6 +84,14 @@ def _run_generate(
         output_path=output_path,
     )
     console.print(f"\n[bold green]Saved:[/bold green] {saved}")
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            peak_gb = torch.cuda.max_memory_reserved() / 1024**3
+            console.print(f"Peak VRAM reserved (torch): [cyan]{peak_gb:.2f} GB[/cyan]")
+    except ImportError:
+        pass
     return saved
 
 
@@ -252,7 +260,24 @@ def info():
         if torch.cuda.is_available():
             dev = torch.cuda.get_device_properties(0)
             vram_gb = dev.total_memory / 1024**3
-            console.print(f"\nGPU: [bold]{dev.name}[/bold] — {vram_gb:.1f} GB VRAM")
+            sm = f"sm_{dev.major}{dev.minor}"
+            sm_tuple = (dev.major, dev.minor)
+            arch = (
+                "Blackwell"
+                if sm_tuple >= (12, 0)
+                else "Hopper"
+                if sm_tuple >= (9, 0)
+                else "Ada Lovelace"
+                if sm_tuple >= (8, 9)
+                else "Ampere"
+                if sm_tuple >= (8, 0)
+                else "Turing"
+                if sm_tuple >= (7, 0)
+                else "Pascal"
+                if sm_tuple >= (6, 0)
+                else "Unknown"
+            )
+            console.print(f"\nGPU: [bold]{dev.name}[/bold] — {vram_gb:.1f} GB VRAM — {sm} ({arch})")
         else:
             console.print("\n[yellow]No CUDA GPU detected.[/yellow]")
     except ImportError:
