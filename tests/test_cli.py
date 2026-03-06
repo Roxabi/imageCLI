@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -37,6 +37,23 @@ def test_info_command_no_cuda():
     assert "engine" in result.output.lower() or "config" in result.output.lower()
     # Verify the no-CUDA branch was actually reached
     assert "no cuda" in result.output.lower() or "No CUDA GPU" in result.output
+
+
+def test_info_command_shows_compute_capability():
+    mock_props = MagicMock()
+    mock_props.name = "NVIDIA GeForce RTX 3080"
+    mock_props.total_memory = 10 * 1024**3
+    mock_props.major = 8
+    mock_props.minor = 6
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_properties", return_value=mock_props),
+    ):
+        result = runner.invoke(app, ["info"])
+    assert result.exit_code == 0
+    assert "RTX 3080" in result.output
+    assert "sm_86" in result.output
+    assert "Ampere" in result.output
 
 
 def test_no_args_shows_help():

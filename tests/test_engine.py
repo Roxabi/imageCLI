@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from imagecli.engine import (
     ImageEngine,
     InsufficientResourcesError,
+    _get_compute_capability,
     _get_registry,
     get_engine,
     list_engines,
@@ -55,6 +56,24 @@ def test_list_engines():
     for entry in engines:
         for key in required_keys:
             assert key in entry, f"Engine entry missing key {key!r}: {entry}"
+
+
+def test_get_compute_capability_no_cuda():
+    with patch("torch.cuda.is_available", return_value=False):
+        result = _get_compute_capability()
+    assert result == (0, 0)
+
+
+def test_get_compute_capability_with_cuda():
+    mock_props = MagicMock()
+    mock_props.major = 8
+    mock_props.minor = 6
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_properties", return_value=mock_props),
+    ):
+        result = _get_compute_capability()
+    assert result == (8, 6)
 
 
 def test_preflight_no_cuda():

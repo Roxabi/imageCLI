@@ -85,6 +85,9 @@ class ImageEngine(ABC):
             generator=generator,
         )
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
         with torch.inference_mode():
             result = self._pipe(**pipe_kwargs)
 
@@ -180,6 +183,16 @@ def preflight_check(engine: ImageEngine) -> None:
                     break
     except FileNotFoundError:
         pass  # non-Linux, skip RAM check
+
+
+def _get_compute_capability() -> tuple[int, int]:
+    """Return (major, minor) CUDA compute capability of GPU 0, or (0, 0) if unavailable."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return (0, 0)
+    props = torch.cuda.get_device_properties(0)
+    return (props.major, props.minor)
 
 
 def _get_registry() -> dict[str, type[ImageEngine]]:
