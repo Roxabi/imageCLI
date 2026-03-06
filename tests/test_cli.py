@@ -199,6 +199,7 @@ def test_generate_shows_peak_vram(tmp_path: Path):
     mock_engine.name = "flux2-klein"
     mock_engine.description = "test engine"
     mock_engine.generate.return_value = fake_img
+    mock_engine.effective_steps.return_value = 20  # must be int for Rich progress bar
 
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
