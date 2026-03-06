@@ -225,6 +225,8 @@ def test_image_engine_default_capabilities():
     assert hasattr(ImageEngine, "capabilities")
     assert isinstance(ImageEngine.capabilities, EngineCapabilities)
     assert ImageEngine.capabilities.negative_prompt is True
+    assert ImageEngine.capabilities.fixed_steps is None  # ADD THIS
+    assert ImageEngine.capabilities.fixed_guidance is None  # ADD THIS
 
 
 def test_flux2_klein_capabilities():
@@ -278,7 +280,13 @@ def test_warn_negative_prompt_flux2_klein(capsys):
 
     # Act
     warn_ignored_params(
-        engine, "ugly blurry", 50, 4.0, steps_explicit=False, guidance_explicit=False
+        engine,
+        "ugly blurry",
+        50,
+        4.0,
+        negative_explicit=True,
+        steps_explicit=False,
+        guidance_explicit=False,
     )
     captured = capsys.readouterr()
 
@@ -293,7 +301,15 @@ def test_warn_negative_prompt_flux1_schnell(capsys):
     engine = get_engine("flux1-schnell")
 
     # Act
-    warn_ignored_params(engine, "ugly", 4, 0.0, steps_explicit=False, guidance_explicit=False)
+    warn_ignored_params(
+        engine,
+        "ugly",
+        4,
+        0.0,
+        negative_explicit=True,
+        steps_explicit=False,
+        guidance_explicit=False,
+    )
     captured = capsys.readouterr()
 
     # Assert: warning about negative_prompt printed to stderr
@@ -307,7 +323,9 @@ def test_warn_steps_sd35_explicit(capsys):
     engine = get_engine("sd35")
 
     # Act: user explicitly set steps=30 but sd35 fixes them at 20
-    warn_ignored_params(engine, "", 30, 4.0, steps_explicit=True, guidance_explicit=False)
+    warn_ignored_params(
+        engine, "", 30, 4.0, negative_explicit=False, steps_explicit=True, guidance_explicit=False
+    )
     captured = capsys.readouterr()
 
     # Assert: warning about steps printed to stderr
@@ -321,7 +339,9 @@ def test_warn_guidance_sd35_explicit(capsys):
     engine = get_engine("sd35")
 
     # Act: user explicitly set guidance=7.5 but sd35 fixes it at 1.0
-    warn_ignored_params(engine, "", 50, 7.5, steps_explicit=False, guidance_explicit=True)
+    warn_ignored_params(
+        engine, "", 50, 7.5, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
     captured = capsys.readouterr()
 
     # Assert: warning about guidance printed to stderr
@@ -335,7 +355,9 @@ def test_warn_guidance_flux1_schnell_explicit(capsys):
     engine = get_engine("flux1-schnell")
 
     # Act: user explicitly set guidance=7.5 but schnell fixes it at 0.0
-    warn_ignored_params(engine, "", 4, 7.5, steps_explicit=False, guidance_explicit=True)
+    warn_ignored_params(
+        engine, "", 4, 7.5, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
     captured = capsys.readouterr()
 
     # Assert: warning about guidance printed to stderr
@@ -349,7 +371,9 @@ def test_no_warn_steps_flux2_klein_supported(capsys):
     engine = get_engine("flux2-klein")
 
     # Act: steps are supported on flux2-klein — no warning expected
-    warn_ignored_params(engine, "", 30, 4.0, steps_explicit=True, guidance_explicit=False)
+    warn_ignored_params(
+        engine, "", 30, 4.0, negative_explicit=False, steps_explicit=True, guidance_explicit=False
+    )
     captured = capsys.readouterr()
 
     # Assert: no warning about steps
@@ -363,7 +387,9 @@ def test_no_warn_guidance_schnell_matches_fixed(capsys):
     engine = get_engine("flux1-schnell")
 
     # Act: user explicitly set guidance=0.0 which matches the fixed value — no warning
-    warn_ignored_params(engine, "", 4, 0.0, steps_explicit=False, guidance_explicit=True)
+    warn_ignored_params(
+        engine, "", 4, 0.0, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
     captured = capsys.readouterr()
 
     # Assert: no warning about guidance when value matches fixed value
@@ -377,7 +403,9 @@ def test_no_warn_steps_sd35_not_explicit(capsys):
     engine = get_engine("sd35")
 
     # Act: steps=50 would conflict with fixed_steps=20, but steps_explicit=False (came from config)
-    warn_ignored_params(engine, "", 50, 4.0, steps_explicit=False, guidance_explicit=False)
+    warn_ignored_params(
+        engine, "", 50, 4.0, negative_explicit=False, steps_explicit=False, guidance_explicit=False
+    )
     captured = capsys.readouterr()
 
     # Assert: no warning when steps were not explicitly set by the user
@@ -391,7 +419,9 @@ def test_no_warn_empty_negative_flux2_klein(capsys):
     engine = get_engine("flux2-klein")
 
     # Act: empty negative_prompt — nothing to warn about
-    warn_ignored_params(engine, "", 50, 4.0, steps_explicit=False, guidance_explicit=False)
+    warn_ignored_params(
+        engine, "", 50, 4.0, negative_explicit=False, steps_explicit=False, guidance_explicit=False
+    )
     captured = capsys.readouterr()
 
     # Assert: no output at all on stderr

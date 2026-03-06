@@ -68,6 +68,7 @@ def _run_generate(
     engine_instance: object | None = None,
     *,
     compile: bool = True,
+    negative_explicit: bool = False,
     steps_explicit: bool = False,
     guidance_explicit: bool = False,
 ):
@@ -81,6 +82,7 @@ def _run_generate(
         negative_prompt,
         steps,
         guidance,
+        negative_explicit=negative_explicit,
         steps_explicit=steps_explicit,
         guidance_explicit=guidance_explicit,
     )
@@ -177,6 +179,7 @@ def generate(
         sd = seed if seed is not None else doc.seed
         neg = negative or doc.negative_prompt
         out_fmt = fmt or doc.format or cfg.get("format", "png")
+        negative_explicit = bool(negative) or bool(doc.negative_prompt)
         steps_explicit = steps is not None or doc.steps is not None
         guidance_explicit = guidance is not None or doc.guidance is not None
     else:
@@ -190,6 +193,7 @@ def generate(
         sd = seed
         neg = negative
         out_fmt = fmt or cfg.get("format", "png")
+        negative_explicit = bool(negative)
         steps_explicit = steps is not None
         guidance_explicit = guidance is not None
 
@@ -211,6 +215,7 @@ def generate(
         out_fmt,
         out_path,
         compile=not no_compile,
+        negative_explicit=negative_explicit,
         steps_explicit=steps_explicit,
         guidance_explicit=guidance_explicit,
     )
@@ -257,6 +262,7 @@ def batch(
             g = doc.guidance or cfg["guidance"]
             fmt = doc.format or cfg.get("format", "png")
             out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
+            negative_explicit = bool(doc.negative_prompt)
             steps_explicit = doc.steps is not None
             guidance_explicit = doc.guidance is not None
             _run_generate(
@@ -271,6 +277,7 @@ def batch(
                 fmt,
                 out_path,
                 engine_instance=engine_cache[engine_name],
+                negative_explicit=negative_explicit,
                 steps_explicit=steps_explicit,
                 guidance_explicit=guidance_explicit,
             )

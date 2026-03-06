@@ -254,6 +254,7 @@ def warn_ignored_params(
     steps: int,
     guidance: float,
     *,
+    negative_explicit: bool,
     steps_explicit: bool,
     guidance_explicit: bool,
 ) -> None:
@@ -263,7 +264,7 @@ def warn_ignored_params(
     stderr = Console(stderr=True)
     caps = engine.capabilities
 
-    if negative_prompt and not caps.negative_prompt:
+    if negative_explicit and not caps.negative_prompt:
         stderr.print(
             f"[yellow]Warning:[/yellow] {engine.name} ignores negative_prompt "
             f"(not supported by this engine)."
