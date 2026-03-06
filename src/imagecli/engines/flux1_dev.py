@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine, get_compute_capability
+from imagecli.engine import EngineCapabilities, ImageEngine, get_compute_capability
 
 
 class Flux1DevEngine(ImageEngine):
@@ -10,6 +10,7 @@ class Flux1DevEngine(ImageEngine):
     description = "FLUX.1-dev quantized — top quality, ~10GB VRAM (Black Forest Labs)"
     model_id = "black-forest-labs/FLUX.1-dev"
     vram_gb = 10.0
+    capabilities = EngineCapabilities(negative_prompt=False)
 
     def _load(self):
         if self._pipe is not None:

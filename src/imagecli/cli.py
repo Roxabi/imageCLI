@@ -68,12 +68,22 @@ def _run_generate(
     engine_instance: object | None = None,
     *,
     compile: bool = True,
+    steps_explicit: bool = False,
+    guidance_explicit: bool = False,
 ):
-    from imagecli.engine import ImageEngine, get_engine, preflight_check
+    from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
     engine: ImageEngine = engine_instance or get_engine(engine_name, compile=compile)
 
     preflight_check(engine)
+    warn_ignored_params(
+        engine,
+        negative_prompt,
+        steps,
+        guidance,
+        steps_explicit=steps_explicit,
+        guidance_explicit=guidance_explicit,
+    )
 
     console.print(f"Engine: [bold cyan]{engine_name}[/bold cyan] — {engine.description}")
     console.print(f"Size: {width}×{height}  Steps: {steps}  Guidance: {guidance}")
@@ -167,6 +177,8 @@ def generate(
         sd = seed if seed is not None else doc.seed
         neg = negative or doc.negative_prompt
         out_fmt = fmt or doc.format or cfg.get("format", "png")
+        steps_explicit = steps is not None or doc.steps is not None
+        guidance_explicit = guidance is not None or doc.guidance is not None
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -178,6 +190,8 @@ def generate(
         sd = seed
         neg = negative
         out_fmt = fmt or cfg.get("format", "png")
+        steps_explicit = steps is not None
+        guidance_explicit = guidance is not None
 
     if output:
         out_path = Path(output)
@@ -186,7 +200,19 @@ def generate(
         out_path = _resolve_output(cfg, stem, out_fmt, output_dir)
 
     _run_generate(
-        prompt_text, neg, engine_name, w, h, s, g, sd, out_fmt, out_path, compile=not no_compile
+        prompt_text,
+        neg,
+        engine_name,
+        w,
+        h,
+        s,
+        g,
+        sd,
+        out_fmt,
+        out_path,
+        compile=not no_compile,
+        steps_explicit=steps_explicit,
+        guidance_explicit=guidance_explicit,
     )
 
 
@@ -231,6 +257,8 @@ def batch(
             g = doc.guidance or cfg["guidance"]
             fmt = doc.format or cfg.get("format", "png")
             out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
+            steps_explicit = doc.steps is not None
+            guidance_explicit = doc.guidance is not None
             _run_generate(
                 doc.prompt,
                 doc.negative_prompt,
@@ -243,6 +271,8 @@ def batch(
                 fmt,
                 out_path,
                 engine_instance=engine_cache[engine_name],
+                steps_explicit=steps_explicit,
+                guidance_explicit=guidance_explicit,
             )
             successes += 1
         except Exception as e:
@@ -260,18 +290,39 @@ def batch(
 @app.command()
 def engines():
     """List available image generation engines."""
+    from rich.console import Console as _Console
+
     from imagecli.engine import list_engines
 
+    wide = _Console(width=200)
+
     table = Table(title="Available Engines")
-    table.add_column("Name", style="cyan")
+    table.add_column("Name", style="cyan", no_wrap=True)
     table.add_column("VRAM", justify="right")
+    table.add_column("Neg Prompt", justify="center")
+    table.add_column("Steps", justify="center")
+    table.add_column("Guidance", justify="center")
     table.add_column("Description")
     table.add_column("Model ID", style="dim")
 
     for e in list_engines():
-        table.add_row(e["name"], f"{e['vram_gb']}GB", e["description"], e["model_id"])
+        caps = e["capabilities"]
+        neg = "✓" if caps["negative_prompt"] else "✗"
+        steps_col = f"fixed {caps['fixed_steps']}" if caps["fixed_steps"] is not None else "✓"
+        guidance_col = (
+            f"fixed {caps['fixed_guidance']}" if caps["fixed_guidance"] is not None else "✓"
+        )
+        table.add_row(
+            e["name"],
+            f"{e['vram_gb']}GB",
+            neg,
+            steps_col,
+            guidance_col,
+            e["description"],
+            e["model_id"],
+        )
 
-    console.print(table)
+    wide.print(table)
 
 
 @app.command()

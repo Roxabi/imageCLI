@@ -6,7 +6,9 @@ import gc
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 # Minimum free system RAM (in GB) required to start loading a model.
 # model_cpu_offload shuffles layers through CPU, so we need headroom.
@@ -14,6 +16,15 @@ MIN_FREE_RAM_GB = float(os.environ.get("IMAGECLI_MIN_FREE_RAM_GB", "4.0"))
 
 # Process-global flag — set_float32_matmul_precision only needs to be called once.
 _tf32_set = False
+
+
+@dataclass
+class EngineCapabilities:
+    """Declares which generation parameters this engine actually uses."""
+
+    negative_prompt: bool = True
+    fixed_steps: int | None = None
+    fixed_guidance: float | None = None
 
 
 class InsufficientResourcesError(RuntimeError):
@@ -25,6 +36,7 @@ class ImageEngine(ABC):
     description: str
     model_id: str
     vram_gb: float  # approximate minimum VRAM
+    capabilities: ClassVar[EngineCapabilities] = EngineCapabilities()
 
     def __init__(self, *, compile: bool = True) -> None:
         self._pipe: object | None = None
@@ -236,6 +248,37 @@ def get_compute_capability() -> tuple[int, int]:
     return (props.major, props.minor)
 
 
+def warn_ignored_params(
+    engine: ImageEngine,
+    negative_prompt: str,
+    steps: int,
+    guidance: float,
+    *,
+    steps_explicit: bool,
+    guidance_explicit: bool,
+) -> None:
+    """Warn when the user provided a parameter the engine will ignore."""
+    from rich.console import Console
+
+    stderr = Console(stderr=True)
+    caps = engine.capabilities
+
+    if negative_prompt and not caps.negative_prompt:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores negative_prompt "
+            f"(not supported by this engine)."
+        )
+    if steps_explicit and caps.fixed_steps is not None and steps != caps.fixed_steps:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores steps (fixed at {caps.fixed_steps})."
+        )
+    if guidance_explicit and caps.fixed_guidance is not None and guidance != caps.fixed_guidance:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores guidance "
+            f"(fixed at {caps.fixed_guidance})."
+        )
+
+
 def _get_registry() -> dict[str, type[ImageEngine]]:
     from imagecli.engines.flux1_dev import Flux1DevEngine
     from imagecli.engines.flux1_schnell import Flux1SchnellEngine
@@ -266,6 +309,11 @@ def list_engines() -> list[dict]:
             "description": cls.description,
             "model_id": cls.model_id,
             "vram_gb": cls.vram_gb,
+            "capabilities": {
+                "negative_prompt": cls.capabilities.negative_prompt,
+                "fixed_steps": cls.capabilities.fixed_steps,
+                "fixed_guidance": cls.capabilities.fixed_guidance,
+            },
         }
         for name, cls in registry.items()
     ]
