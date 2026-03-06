@@ -1,0 +1,49 @@
+---
+title: "feat: engine capability matrix / translate layer"
+issue: 10
+status: approved
+tier: F-lite
+date: 2026-03-06
+---
+
+## Problem
+
+imageCLI passes user-provided parameters (e.g. `negative_prompt`, `steps`, `guidance`) directly to
+engines without checking whether the engine actually supports them. Each engine silently ignores
+unsupported parameters — FLUX engines ignore `negative_prompt`, SD 3.5 Turbo ignores custom `steps`
+(always 20) and `guidance` (always 1.0), FLUX Schnell ignores `guidance` (always 0.0).
+
+The result is a subtle UX hazard: users author `.md` prompt files or pass CLI flags expecting
+effect, get no error or warning, and may not realize their settings were ignored. A capability
+matrix and a translate/warn layer would surface these mismatches immediately at generation time.
+
+## Who
+
+- **Primary:** imageCLI users who author `.md` prompt files or pass CLI flags with engine-specific
+  parameters (e.g. `negative_prompt: "blurry"` in a frontmatter used with a FLUX engine).
+- **Secondary:** future contributors adding new engines — the capability contract makes it clear
+  which parameters each engine must declare support for.
+
+## Constraints
+
+- Keep it simple: capability flags live on the engine class, no new abstraction layers.
+- No change to external engine behavior — only add warnings, never silently drop or transform params.
+- Compatible with the existing `ImageEngine` base class and registry pattern.
+
+## Out of Scope
+
+- Automatically substituting parameters (e.g. mapping `negative_prompt` into prompt weighting for FLUX).
+- Per-engine config validation at config-load time (warn at generation time only).
+- Adding new engines or changing existing generation logic.
+
+## Complexity
+
+**Tier: F-lite** — clear single-domain change (engine layer), well-bounded acceptance criteria,
+no architectural unknowns.
+
+Signals observed:
+- Files touched: ~5–7 (engine base class, 4 engine implementations, cli.py for engines output, tests)
+- Technical risk: low — known patterns, additive change
+- Architectural impact: single module (engine layer), shared base class update
+- Unknowns: 0
+- Domain breadth: 1 (engine layer)
