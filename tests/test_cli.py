@@ -253,3 +253,18 @@ def test_run_generate_passes_callback_to_engine(tmp_path: Path):
 
     # Assert: cleanup() was called once (engine_instance is None → single-image path).
     mock_engine.cleanup.assert_called_once()
+
+
+# ── T14: engines command capability columns ──────────────────────────────────
+
+
+def test_engines_command_shows_capability_columns():
+    # Act
+    result = runner.invoke(app, ["engines"])
+
+    # Assert
+    assert result.exit_code == 0
+    # Capability columns should be present
+    assert "Neg Prompt" in result.output or "neg" in result.output.lower()
+    # sd35 has fixed steps and guidance
+    assert "fixed" in result.output.lower() or "20" in result.output
