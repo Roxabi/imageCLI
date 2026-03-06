@@ -15,10 +15,40 @@ Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, FLUX.1-schn
 
 ## Install
 
+### From source (development)
+
 ```bash
 git clone <repo-url> && cd imageCLI
 uv sync
 cp imagecli.example.toml ~/imagecli.toml   # optional — customize defaults
+```
+
+Run via `uv run imagecli <command>` from the project directory.
+
+### Global install (run from any directory)
+
+imagecli ships a `[project.scripts]` entry so it installs as a proper system command.
+
+**uv tool (preferred)** — run from the project directory so uv picks up the custom PyTorch `cu128` index from `pyproject.toml` automatically:
+
+```bash
+cd /path/to/imageCLI
+uv tool install .
+```
+
+**pipx (alternative)** — pass the PyTorch index explicitly using `--index-url` (replaces PyPI entirely, avoiding dependency confusion for `torch`/`torchvision`):
+
+```bash
+pipx install -e /path/to/imageCLI --pip-args="--index-url https://download.pytorch.org/whl/cu128"
+```
+
+> **Note:** pip does not read `[tool.uv.sources]` from `pyproject.toml`. This means the git-pinned `diffusers` source and index overrides used by `uv` are ignored — pip resolves all packages from the pytorch wheel index above. For the exact tested dependency graph, prefer `uv tool install .`.
+
+After either install, `imagecli` is on your `PATH` and works from any directory:
+
+```bash
+imagecli info                          # verify install + GPU detection
+imagecli generate "a cat in space"     # generate from anywhere
 ```
 
 Models are downloaded automatically on first use from HuggingFace (~13GB for FLUX.2-klein).
