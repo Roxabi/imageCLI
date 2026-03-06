@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine, _get_compute_capability
+from imagecli.engine import ImageEngine, get_compute_capability
 
 
 class Flux1SchnellEngine(ImageEngine):
@@ -17,30 +17,15 @@ class Flux1SchnellEngine(ImageEngine):
         import torch
         from diffusers import FluxPipeline
 
-        sm = _get_compute_capability()
+        sm = get_compute_capability()
         qtype_label = "fp8" if sm >= (8, 9) else "int8"
         print(f"Loading {self.model_id} ({qtype_label}) …")
         self._pipe = FluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
-        # fp8 on Ada Lovelace/Blackwell (sm≥89); int8 on Ampere (sm≥80) — both ~10GB
-        try:
-            from optimum.quanto import freeze, quantize  # type: ignore[import-untyped]
-
-            if sm >= (8, 9):
-                from optimum.quanto import qfloat8  # type: ignore[import-untyped]
-
-                quantize(self._pipe.transformer, weights=qfloat8)
-            else:
-                from optimum.quanto import qint8  # type: ignore[import-untyped]
-
-                quantize(self._pipe.transformer, weights=qint8)
-            freeze(self._pipe.transformer)
-            print(f"Transformer quantized to {qtype_label}.")
-        except Exception as e:
-            print(f"Warning: quantization failed ({e}), using bf16.")
-
+        actual_qtype = self._quantize_transformer(self._pipe, sm)
+        print(f"Transformer quantized to {actual_qtype}.")
         self._finalize_load(self._pipe)
         print("Model ready.")
 

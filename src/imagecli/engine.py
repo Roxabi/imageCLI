@@ -136,6 +136,34 @@ class ImageEngine(ABC):
                 )
                 self._compiled = True
 
+    def _quantize_transformer(self, pipe: object, sm: tuple[int, int]) -> str:
+        """Quantize the transformer: fp8 on sm≥(8,9), int8 on Ampere. Returns qtype used."""
+        try:
+            from optimum.quanto import freeze, quantize  # type: ignore[import-untyped]
+
+            if sm >= (8, 9):
+                from optimum.quanto import qfloat8  # type: ignore[import-untyped]
+
+                quantize(pipe.transformer, weights=qfloat8)
+                qtype = "fp8"
+            else:
+                from optimum.quanto import qint8  # type: ignore[import-untyped]
+
+                quantize(pipe.transformer, weights=qint8)
+                qtype = "int8"
+            freeze(pipe.transformer)
+            return qtype
+        except ImportError as e:
+            raise RuntimeError(
+                f"optimum-quanto is required for quantization: {e}\n"
+                "Install it with: uv add optimum[quanto]"
+            ) from e
+        except (RuntimeError, ValueError) as e:
+            print(
+                f"Warning: quantization failed ({e}), proceeding with bf16 (~20GB VRAM required)."
+            )
+            return "bf16"
+
     def cleanup(self) -> None:
         """Free VRAM / RAM after generation."""
         import torch
@@ -185,7 +213,7 @@ def preflight_check(engine: ImageEngine) -> None:
         pass  # non-Linux, skip RAM check
 
 
-def _get_compute_capability() -> tuple[int, int]:
+def get_compute_capability() -> tuple[int, int]:
     """Return (major, minor) CUDA compute capability of GPU 0, or (0, 0) if unavailable."""
     import torch
 
