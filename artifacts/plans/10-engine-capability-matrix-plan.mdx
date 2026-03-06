@@ -1,0 +1,594 @@
+---
+title: "Plan: feat: engine capability matrix / translate layer"
+issue: 10
+spec: artifacts/specs/10-engine-capability-matrix-spec.mdx
+complexity: 5/10
+tier: F-lite
+generated: 2026-03-06
+---
+
+## Summary
+
+Add an `EngineCapabilities` dataclass to the engine base class, declare capabilities on all four
+engines, implement `warn_ignored_params()` alongside `preflight_check`, wire explicit-flag params
+through `_run_generate()`, and surface capabilities in `imagecli engines`.
+
+## Agents
+
+| Agent | Tasks | Files |
+|-------|-------|-------|
+| backend-dev | T1–T11 | `engine.py`, 4 engine files, `cli.py` |
+| tester | T12–T14 | `tests/test_engine.py`, `tests/test_cli.py` |
+
+## Reference Patterns
+
+- `preflight_check()` in `engine.py:145` — pattern for `warn_ignored_params`: standalone function,
+  imported by `cli.py`, uses `Console(stderr=True)` for user-facing output.
+- `vram_gb: float` class attr on `ImageEngine` — pattern for adding `capabilities` as class-level
+  `ClassVar`; requires `from typing import ClassVar`.
+
+## Consistency Report
+
+- Spec success criteria covered: 21/21
+- Uncovered: none
+- Untraced tasks: none
+- Exemptions: T1 is prerequisite for T2–T5 and T10 (all traced to SC-1/SC-2)
+
+---
+
+## Slice V1 — EngineCapabilities dataclass + engine declarations
+
+### T1 — Add `EngineCapabilities` dataclass + `ClassVar` to `ImageEngine`
+
+- **File:** `src/imagecli/engine.py`
+- **Phase:** GREEN
+- **Parallel:** N (prerequisite for T2–T5, T10)
+- **Spec trace:** SC-1, SC-2
+- **Difficulty:** 2
+- **Time:** 5 min
+
+**Code shape:**
+```python
+# Add at top of engine.py after imports
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+@dataclass
+class EngineCapabilities:
+    """Declares which generation parameters this engine actually uses."""
+    negative_prompt: bool = True
+    fixed_steps: int | None = None
+    fixed_guidance: float | None = None
+
+# In ImageEngine class body (alongside name, description, vram_gb):
+    capabilities: ClassVar[EngineCapabilities] = field(default_factory=EngineCapabilities)
+```
+
+Note: `ClassVar` with a mutable default — use `EngineCapabilities()` directly (dataclass is
+effectively immutable for our purposes):
+```python
+    capabilities: ClassVar[EngineCapabilities] = EngineCapabilities()
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engine import EngineCapabilities, ImageEngine; print(ImageEngine.capabilities)"
+# Expected: EngineCapabilities(negative_prompt=True, fixed_steps=None, fixed_guidance=None)
+```
+
+---
+
+### T2 — Declare `capabilities` on `Flux2KleinEngine` [P]
+
+- **File:** `src/imagecli/engines/flux2_klein.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T1)
+- **Spec trace:** SC-3
+- **Difficulty:** 1
+- **Time:** 2 min
+
+**Code shape:**
+```python
+from imagecli.engine import EngineCapabilities, ImageEngine
+
+class Flux2KleinEngine(ImageEngine):
+    name = "flux2-klein"
+    description = "..."
+    model_id = "..."
+    vram_gb = 13.0
+    capabilities = EngineCapabilities(negative_prompt=False)
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engines.flux2_klein import Flux2KleinEngine; print(Flux2KleinEngine.capabilities)"
+# Expected: EngineCapabilities(negative_prompt=False, fixed_steps=None, fixed_guidance=None)
+```
+
+---
+
+### T3 — Declare `capabilities` on `Flux1DevEngine` [P]
+
+- **File:** `src/imagecli/engines/flux1_dev.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T1)
+- **Spec trace:** SC-4
+- **Difficulty:** 1
+- **Time:** 2 min
+
+**Code shape:**
+```python
+capabilities = EngineCapabilities(negative_prompt=False)
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engines.flux1_dev import Flux1DevEngine; print(Flux1DevEngine.capabilities)"
+# Expected: EngineCapabilities(negative_prompt=False, fixed_steps=None, fixed_guidance=None)
+```
+
+---
+
+### T4 — Declare `capabilities` on `Flux1SchnellEngine` [P]
+
+- **File:** `src/imagecli/engines/flux1_schnell.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T1)
+- **Spec trace:** SC-5
+- **Difficulty:** 1
+- **Time:** 2 min
+
+**Code shape:**
+```python
+# Steps are NOT fixed (user can override the 4-step default)
+capabilities = EngineCapabilities(negative_prompt=False, fixed_guidance=0.0)
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engines.flux1_schnell import Flux1SchnellEngine; print(Flux1SchnellEngine.capabilities)"
+# Expected: EngineCapabilities(negative_prompt=False, fixed_steps=None, fixed_guidance=0.0)
+```
+
+---
+
+### T5 — Declare `capabilities` on `SD35Engine` [P]
+
+- **File:** `src/imagecli/engines/sd35.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T1)
+- **Spec trace:** SC-6
+- **Difficulty:** 1
+- **Time:** 2 min
+
+**Code shape:**
+```python
+# negative_prompt=True (sd35 does support it — default stays True)
+capabilities = EngineCapabilities(fixed_steps=20, fixed_guidance=1.0)
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engines.sd35 import SD35Engine; print(SD35Engine.capabilities)"
+# Expected: EngineCapabilities(negative_prompt=True, fixed_steps=20, fixed_guidance=1.0)
+```
+
+---
+
+### ── RED-GATE V1 ──
+
+```bash
+uv run pytest tests/test_engine.py -k "capabilities" -v
+# All T12 tests must pass before proceeding to V2
+```
+
+---
+
+## Slice V2 — warn_ignored_params + explicit-flag wiring
+
+### T6 — Implement `warn_ignored_params()` in `engine.py`
+
+- **File:** `src/imagecli/engine.py`
+- **Phase:** GREEN
+- **Parallel:** N (after V1 RED-GATE)
+- **Spec trace:** SC-10 through SC-18
+- **Difficulty:** 3
+- **Time:** 8 min
+
+**Code shape** (place after `preflight_check`, same pattern):
+```python
+def warn_ignored_params(
+    engine: ImageEngine,
+    negative_prompt: str,
+    steps: int,
+    guidance: float,
+    *,
+    steps_explicit: bool,
+    guidance_explicit: bool,
+) -> None:
+    """Warn when the user provided a parameter the engine will ignore."""
+    from rich.console import Console
+
+    stderr = Console(stderr=True)
+    caps = engine.capabilities
+
+    if negative_prompt and not caps.negative_prompt:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores negative_prompt "
+            f"(not supported by this engine)."
+        )
+    if steps_explicit and caps.fixed_steps is not None and steps != caps.fixed_steps:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores steps "
+            f"(fixed at {caps.fixed_steps})."
+        )
+    if guidance_explicit and caps.fixed_guidance is not None and guidance != caps.fixed_guidance:
+        stderr.print(
+            f"[yellow]Warning:[/yellow] {engine.name} ignores guidance "
+            f"(fixed at {caps.fixed_guidance})."
+        )
+```
+
+**Verify:**
+```bash
+uv run python -c "
+from imagecli.engine import warn_ignored_params, get_engine
+e = get_engine('flux2-klein')
+warn_ignored_params(e, 'ugly', 50, 4.0, steps_explicit=False, guidance_explicit=False)
+"
+# Expected: no output (negative_prompt empty, no explicit flags)
+```
+
+---
+
+### T7 — Add explicit flags to `_run_generate()` + call `warn_ignored_params`
+
+- **File:** `src/imagecli/cli.py`
+- **Phase:** GREEN
+- **Parallel:** N (after T6)
+- **Spec trace:** SC-7, SC-8, SC-9
+- **Difficulty:** 3
+- **Time:** 8 min
+
+**Code shape:**
+```python
+# Add to imports in cli.py:
+from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
+
+# Update _run_generate signature:
+def _run_generate(
+    prompt: str,
+    negative_prompt: str,
+    engine_name: str,
+    width: int,
+    height: int,
+    steps: int,
+    guidance: float,
+    seed: int | None,
+    fmt: str,
+    output_path: Path,
+    engine_instance: object | None = None,
+    *,
+    compile: bool = True,
+    steps_explicit: bool = False,
+    guidance_explicit: bool = False,
+):
+    ...
+    preflight_check(engine)
+    warn_ignored_params(
+        engine,
+        negative_prompt,
+        steps,
+        guidance,
+        steps_explicit=steps_explicit,
+        guidance_explicit=guidance_explicit,
+    )
+    # rest unchanged
+```
+
+**Verify:**
+```bash
+uv run ruff check src/imagecli/cli.py
+# Expected: no errors
+```
+
+---
+
+### T8 — Derive explicit flags in `generate` command [P]
+
+- **File:** `src/imagecli/cli.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T7)
+- **Spec trace:** SC-8
+- **Difficulty:** 2
+- **Time:** 5 min
+
+**Code shape** — in `generate()`, before the `if output:` block:
+```python
+# For .md file path: check both CLI flag and frontmatter
+if path.suffix == ".md" and path.exists():
+    # ... existing resolution ...
+    steps_explicit = steps is not None or doc.steps is not None
+    guidance_explicit = guidance is not None or doc.guidance is not None
+else:
+    steps_explicit = steps is not None
+    guidance_explicit = guidance is not None
+
+# Pass to _run_generate:
+_run_generate(
+    ...,
+    compile=not no_compile,
+    steps_explicit=steps_explicit,
+    guidance_explicit=guidance_explicit,
+)
+```
+
+**Verify:**
+```bash
+uv run ruff check src/imagecli/cli.py && uv run pytest tests/test_cli.py -v
+```
+
+---
+
+### T9 — Derive explicit flags in `batch` command [P]
+
+- **File:** `src/imagecli/cli.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T7)
+- **Spec trace:** SC-9, SC-19
+- **Difficulty:** 2
+- **Time:** 5 min
+
+**Code shape** — in the `batch()` loop, before `_run_generate`:
+```python
+steps_explicit = doc.steps is not None
+guidance_explicit = doc.guidance is not None
+_run_generate(
+    doc.prompt, doc.negative_prompt, engine_name, w, h, s, g, doc.seed, fmt, out_path,
+    engine_instance=engine_cache[engine_name],
+    steps_explicit=steps_explicit,
+    guidance_explicit=guidance_explicit,
+)
+```
+
+**Verify:**
+```bash
+uv run pytest tests/test_batch.py -v
+```
+
+---
+
+### ── RED-GATE V2 ──
+
+```bash
+uv run pytest tests/test_engine.py tests/test_cli.py tests/test_batch.py -v
+# All V2 tests must pass before proceeding to V3
+```
+
+---
+
+## Slice V3 — list_engines capabilities + engines table
+
+### T10 — Add `capabilities` dict to `list_engines()` [P]
+
+- **File:** `src/imagecli/engine.py`
+- **Phase:** GREEN
+- **Parallel:** Y (with T6, after T1)
+- **Spec trace:** SC-21
+- **Difficulty:** 2
+- **Time:** 3 min
+
+**Code shape:**
+```python
+def list_engines() -> list[dict]:
+    registry = _get_registry()
+    return [
+        {
+            "name": name,
+            "description": cls.description,
+            "model_id": cls.model_id,
+            "vram_gb": cls.vram_gb,
+            "capabilities": {
+                "negative_prompt": cls.capabilities.negative_prompt,
+                "fixed_steps": cls.capabilities.fixed_steps,
+                "fixed_guidance": cls.capabilities.fixed_guidance,
+            },
+        }
+        for name, cls in registry.items()
+    ]
+```
+
+**Verify:**
+```bash
+uv run python -c "from imagecli.engine import list_engines; import pprint; pprint.pprint(list_engines()[0])"
+# Expected: dict with 'capabilities' key containing correct shape
+```
+
+---
+
+### T11 — Update `engines` CLI table with capability columns
+
+- **File:** `src/imagecli/cli.py`
+- **Phase:** GREEN
+- **Parallel:** N (after T10)
+- **Spec trace:** SC-20
+- **Difficulty:** 3
+- **Time:** 8 min
+
+**Code shape:**
+```python
+@app.command()
+def engines():
+    """List available image generation engines."""
+    from imagecli.engine import list_engines
+
+    table = Table(title="Available Engines")
+    table.add_column("Name", style="cyan")
+    table.add_column("VRAM", justify="right")
+    table.add_column("Neg Prompt", justify="center")
+    table.add_column("Steps", justify="center")
+    table.add_column("Guidance", justify="center")
+    table.add_column("Description")
+    table.add_column("Model ID", style="dim")
+
+    for e in list_engines():
+        caps = e["capabilities"]
+        neg = "✓" if caps["negative_prompt"] else "✗"
+        steps = f"fixed {caps['fixed_steps']}" if caps["fixed_steps"] is not None else "✓"
+        guidance = f"fixed {caps['fixed_guidance']}" if caps["fixed_guidance"] is not None else "✓"
+        table.add_row(e["name"], f"{e['vram_gb']}GB", neg, steps, guidance, e["description"], e["model_id"])
+
+    console.print(table)
+```
+
+**Verify:**
+```bash
+uv run imagecli engines
+# Expected: table with Neg Prompt / Steps / Guidance columns; sd35 shows "fixed 20", "fixed 1.0"
+```
+
+---
+
+### ── RED-GATE V3 ──
+
+```bash
+uv run pytest -v && uv run ruff check . && uv run ruff format --check .
+# Full suite + lint must pass
+```
+
+---
+
+## Tests
+
+### T12 — Tests: `EngineCapabilities` declarations on all engines [P]
+
+- **File:** `tests/test_engine.py`
+- **Phase:** GREEN
+- **Parallel:** Y (after T5)
+- **Spec trace:** SC-1 through SC-6
+- **Difficulty:** 2
+- **Time:** 8 min
+
+**Code shape:**
+```python
+def test_engine_capabilities_defaults():
+    from imagecli.engine import EngineCapabilities, ImageEngine
+    assert ImageEngine.capabilities == EngineCapabilities()
+    assert ImageEngine.capabilities.negative_prompt is True
+    assert ImageEngine.capabilities.fixed_steps is None
+    assert ImageEngine.capabilities.fixed_guidance is None
+
+def test_flux2_klein_capabilities():
+    from imagecli.engines.flux2_klein import Flux2KleinEngine
+    assert Flux2KleinEngine.capabilities.negative_prompt is False
+    assert Flux2KleinEngine.capabilities.fixed_steps is None
+
+def test_flux1_dev_capabilities():
+    from imagecli.engines.flux1_dev import Flux1DevEngine
+    assert Flux1DevEngine.capabilities.negative_prompt is False
+
+def test_flux1_schnell_capabilities():
+    from imagecli.engines.flux1_schnell import Flux1SchnellEngine
+    assert Flux1SchnellEngine.capabilities.negative_prompt is False
+    assert Flux1SchnellEngine.capabilities.fixed_guidance == 0.0
+    assert Flux1SchnellEngine.capabilities.fixed_steps is None  # NOT fixed
+
+def test_sd35_capabilities():
+    from imagecli.engines.sd35 import SD35Engine
+    assert SD35Engine.capabilities.negative_prompt is True
+    assert SD35Engine.capabilities.fixed_steps == 20
+    assert SD35Engine.capabilities.fixed_guidance == 1.0
+```
+
+---
+
+### T13 — Tests: `warn_ignored_params()` — all cases
+
+- **File:** `tests/test_engine.py`
+- **Phase:** GREEN
+- **Parallel:** N (after T6)
+- **Spec trace:** SC-10 through SC-18
+- **Difficulty:** 3
+- **Time:** 10 min
+
+**Code shape:**
+```python
+from io import StringIO
+from unittest.mock import patch
+
+from imagecli.engine import get_engine, warn_ignored_params
+
+def _warn(engine_name, neg="", steps=50, guidance=4.0, *, steps_explicit=False, guidance_explicit=False):
+    engine = get_engine(engine_name)
+    with patch("rich.console.Console.print") as mock_print:
+        warn_ignored_params(engine, neg, steps, guidance, steps_explicit=steps_explicit, guidance_explicit=guidance_explicit)
+        return [str(c) for c in mock_print.call_args_list]
+
+def test_warn_negative_prompt_flux2_klein():
+    output = _warn("flux2-klein", neg="ugly")
+    assert any("negative_prompt" in o for o in output)
+
+def test_warn_negative_prompt_flux1_schnell():
+    output = _warn("flux1-schnell", neg="ugly")
+    assert any("negative_prompt" in o for o in output)
+
+def test_warn_steps_sd35_explicit():
+    output = _warn("sd35", steps=30, steps_explicit=True)
+    assert any("steps" in o for o in output)
+
+def test_warn_guidance_sd35_explicit():
+    output = _warn("sd35", guidance=7.5, guidance_explicit=True)
+    assert any("guidance" in o for o in output)
+
+def test_warn_guidance_flux1_schnell_explicit():
+    output = _warn("flux1-schnell", guidance=7.5, guidance_explicit=True)
+    assert any("guidance" in o for o in output)
+
+def test_no_warn_steps_flux2_klein():
+    output = _warn("flux2-klein", steps=30, steps_explicit=True)
+    assert not any("steps" in o for o in output)
+
+def test_no_warn_guidance_schnell_matches_fixed():
+    output = _warn("flux1-schnell", guidance=0.0, guidance_explicit=True)
+    assert not any("guidance" in o for o in output)
+
+def test_no_warn_steps_sd35_not_explicit():
+    # Config default — NOT explicitly set by user
+    output = _warn("sd35", steps=50, steps_explicit=False)
+    assert not any("steps" in o for o in output)
+```
+
+---
+
+### T14 — Tests: `list_engines` capabilities key + `engines` table columns
+
+- **File:** `tests/test_engine.py`, `tests/test_cli.py`
+- **Phase:** GREEN
+- **Parallel:** N (after T11)
+- **Spec trace:** SC-20, SC-21
+- **Difficulty:** 2
+- **Time:** 5 min
+
+**Code shape:**
+```python
+# test_engine.py
+def test_list_engines_capabilities_key():
+    from imagecli.engine import list_engines
+    engines = list_engines()
+    for e in engines:
+        assert "capabilities" in e
+        caps = e["capabilities"]
+        assert "negative_prompt" in caps
+        assert "fixed_steps" in caps
+        assert "fixed_guidance" in caps
+
+# test_cli.py — update existing test_engines_command:
+def test_engines_command_with_capabilities():
+    result = runner.invoke(app, ["engines"])
+    assert result.exit_code == 0
+    assert "Neg Prompt" in result.output
+    assert "Steps" in result.output
+    assert "Guidance" in result.output
+    assert "fixed 20" in result.output   # sd35 steps
+    assert "fixed 1.0" in result.output  # sd35 guidance
+```
