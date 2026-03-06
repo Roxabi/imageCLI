@@ -297,11 +297,7 @@ def batch(
 @app.command()
 def engines():
     """List available image generation engines."""
-    from rich.console import Console as _Console
-
     from imagecli.engine import list_engines
-
-    wide = _Console(width=200)
 
     table = Table(title="Available Engines")
     table.add_column("Name", style="cyan", no_wrap=True)
@@ -329,7 +325,7 @@ def engines():
             e["model_id"],
         )
 
-    wide.print(table)
+    console.print(table)
 
 
 @app.command()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import os
 from abc import ABC, abstractmethod
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -310,11 +311,7 @@ def list_engines() -> list[dict]:
             "description": cls.description,
             "model_id": cls.model_id,
             "vram_gb": cls.vram_gb,
-            "capabilities": {
-                "negative_prompt": cls.capabilities.negative_prompt,
-                "fixed_steps": cls.capabilities.fixed_steps,
-                "fixed_guidance": cls.capabilities.fixed_guidance,
-            },
+            "capabilities": dataclasses.asdict(cls.capabilities),
         }
         for name, cls in registry.items()
     ]
