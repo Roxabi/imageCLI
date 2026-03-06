@@ -213,3 +213,60 @@ def test_generate_shows_peak_vram(tmp_path: Path):
     assert result.exit_code == 0
     assert "Peak VRAM reserved" in result.output
     assert "8.50 GB" in result.output
+
+
+# ── progress bar ─────────────────────────────────────────────────────────────
+
+
+def test_run_generate_passes_callback_to_engine(tmp_path: Path):
+    # Arrange: mock at the engine level so _run_generate runs its full body.
+    mock_engine = MagicMock()
+    mock_engine.name = "flux2-klein"
+    mock_engine.description = "test engine"
+    mock_engine.generate.return_value = tmp_path / "out.png"
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+    ):
+        from imagecli.cli import _run_generate
+
+        _run_generate(
+            "a test prompt",
+            "",
+            "flux2-klein",
+            512,
+            512,
+            20,
+            4.0,
+            None,
+            "png",
+            tmp_path / "out.png",
+        )
+
+    # Assert: engine.generate was called with a non-None callback kwarg.
+    call_kwargs = mock_engine.generate.call_args.kwargs
+    assert "callback" in call_kwargs
+    assert call_kwargs["callback"] is not None
+
+
+@patch("imagecli.cli._run_generate")
+@patch("imagecli.engine.get_engine")
+def test_batch_shows_file_index(mock_get_engine, mock_run, tmp_path: Path):
+    mock_engine = MagicMock()
+    mock_engine.cleanup = MagicMock()
+    mock_get_engine.return_value = mock_engine
+    mock_run.return_value = Path("/fake/out.png")
+
+    for name in ("a.md", "b.md", "c.md"):
+        (tmp_path / name).write_text(
+            "---\nengine: flux2-klein\nwidth: 512\nheight: 512\nsteps: 4\n"
+            "guidance: 0.0\n---\n\ntest prompt\n"
+        )
+
+    result = runner.invoke(app, ["batch", str(tmp_path)])
+    assert result.exit_code == 0
+    # Each file rule should include its 1-based index / total
+    assert "1/3" in result.output
+    assert "2/3" in result.output
+    assert "3/3" in result.output

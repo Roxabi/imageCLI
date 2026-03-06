@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -146,3 +147,49 @@ def test_preflight_no_cuda():
         # Act / Assert
         with pytest.raises(InsufficientResourcesError, match="No CUDA GPU detected"):
             preflight_check(engine)
+
+
+def test_generate_passes_callback_to_pipe(tmp_path: Path):
+    # Arrange: pre-load _pipe so _load() is skipped; inject callback.
+    engine = get_engine("flux2-klein")
+    mock_image = MagicMock()
+    mock_pipe = MagicMock(return_value=MagicMock(images=[mock_image]))
+    engine._pipe = mock_pipe
+
+    callback = MagicMock(return_value={})
+    out = tmp_path / "out.png"
+
+    with (
+        patch("torch.Generator") as mock_gen,
+        patch("torch.inference_mode") as mock_ctx,
+    ):
+        mock_ctx.return_value.__enter__ = MagicMock(return_value=None)
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        mock_gen.return_value.manual_seed.return_value = MagicMock()
+        engine.generate("test prompt", output_path=out, callback=callback)
+
+    # Assert: callback_on_step_end was forwarded to the pipeline
+    call_kwargs = mock_pipe.call_args[1]
+    assert call_kwargs.get("callback_on_step_end") is callback
+
+
+def test_generate_no_callback_omits_kwarg(tmp_path: Path):
+    # Arrange: no callback → callback_on_step_end must NOT appear in pipe kwargs.
+    engine = get_engine("flux2-klein")
+    mock_image = MagicMock()
+    mock_pipe = MagicMock(return_value=MagicMock(images=[mock_image]))
+    engine._pipe = mock_pipe
+
+    out = tmp_path / "out.png"
+
+    with (
+        patch("torch.Generator") as mock_gen,
+        patch("torch.inference_mode") as mock_ctx,
+    ):
+        mock_ctx.return_value.__enter__ = MagicMock(return_value=None)
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        mock_gen.return_value.manual_seed.return_value = MagicMock()
+        engine.generate("test prompt", output_path=out)
+
+    call_kwargs = mock_pipe.call_args[1]
+    assert "callback_on_step_end" not in call_kwargs

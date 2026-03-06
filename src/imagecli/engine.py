@@ -66,6 +66,7 @@ class ImageEngine(ABC):
         guidance: float = 4.0,
         seed: int | None = None,
         output_path: Path,
+        callback: object | None = None,
         **kwargs,
     ) -> Path:
         """Generate an image and save it to output_path. Returns the saved path."""
@@ -84,6 +85,8 @@ class ImageEngine(ABC):
             guidance=guidance,
             generator=generator,
         )
+        if callback is not None:
+            pipe_kwargs["callback_on_step_end"] = callback
 
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
