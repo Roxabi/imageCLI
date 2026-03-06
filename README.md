@@ -36,11 +36,13 @@ cd /path/to/imageCLI
 uv tool install .
 ```
 
-**pipx (alternative)** — pass the PyTorch index explicitly, as pipx uses pip which does not read `[tool.uv.sources]`:
+**pipx (alternative)** — pass the PyTorch index explicitly using `--index-url` (replaces PyPI entirely, avoiding dependency confusion for `torch`/`torchvision`):
 
 ```bash
-pipx install -e /path/to/imageCLI --pip-args="--extra-index-url https://download.pytorch.org/whl/cu128"
+pipx install -e /path/to/imageCLI --pip-args="--index-url https://download.pytorch.org/whl/cu128"
 ```
+
+> **Note:** pip does not read `[tool.uv.sources]` from `pyproject.toml`. This means the git-pinned `diffusers` source and index overrides used by `uv` are ignored — pip resolves all packages from the pytorch wheel index above. For the exact tested dependency graph, prefer `uv tool install .`.
 
 After either install, `imagecli` is on your `PATH` and works from any directory:
 
