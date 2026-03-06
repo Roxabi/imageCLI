@@ -192,4 +192,11 @@ def test_generate_no_callback_omits_kwarg(tmp_path: Path):
         engine.generate("test prompt", output_path=out)
 
     call_kwargs = mock_pipe.call_args[1]
-    assert "callback_on_step_end" not in call_kwargs
+    assert set(call_kwargs.keys()) == {
+        "prompt",
+        "width",
+        "height",
+        "num_inference_steps",
+        "guidance_scale",
+        "generator",
+    }

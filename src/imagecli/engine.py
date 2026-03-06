@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 # Minimum free system RAM (in GB) required to start loading a model.
@@ -33,6 +34,15 @@ class ImageEngine(ABC):
     @abstractmethod
     def _load(self) -> None:
         """Load the model pipeline into self._pipe. Called lazily on first generate()."""
+
+    def effective_steps(self, requested: int) -> int:
+        """Return the number of inference steps that will actually run.
+
+        The default honours the caller's requested value. Engines that hardcode
+        a fixed step count (e.g. SD3.5 Turbo) override this so that progress
+        bars and callers can display the correct total.
+        """
+        return requested
 
     def _build_pipe_kwargs(
         self,
@@ -66,7 +76,7 @@ class ImageEngine(ABC):
         guidance: float = 4.0,
         seed: int | None = None,
         output_path: Path,
-        callback: object | None = None,
+        callback: Callable[..., dict] | None = None,
         **kwargs,
     ) -> Path:
         """Generate an image and save it to output_path. Returns the saved path."""

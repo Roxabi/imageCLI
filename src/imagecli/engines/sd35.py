@@ -35,6 +35,10 @@ class SD35Engine(ImageEngine):
         self._finalize_load(self._pipe)
         print("Model ready.")
 
+    def effective_steps(self, requested: int) -> int:
+        # Turbo always runs exactly 20 steps regardless of what the caller requested.
+        return 20
+
     def _build_pipe_kwargs(
         self, prompt, *, negative_prompt, width, height, steps, guidance, generator
     ):

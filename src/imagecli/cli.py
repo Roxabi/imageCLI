@@ -82,33 +82,37 @@ def _run_generate(
     console.print(f"Prompt: [italic]{prompt[:120]}{'…' if len(prompt) > 120 else ''}[/italic]")
     console.print(f"Output → [green]{output_path}[/green]")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Generating…", total=steps)
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Generating…", total=engine.effective_steps(steps))
 
-        def _step_callback(pipeline, step, timestep, callback_kwargs):  # noqa: ANN001, ANN202
-            progress.update(task, completed=step + 1)
-            return callback_kwargs
+            def _step_callback(pipeline, step, timestep, callback_kwargs):  # noqa: ANN001, ANN202
+                progress.update(task, completed=step + 1)
+                return callback_kwargs
 
-        saved = engine.generate(
-            prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            steps=steps,
-            guidance=guidance,
-            seed=seed,
-            output_path=output_path,
-            callback=_step_callback,
-        )
+            saved = engine.generate(
+                prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                steps=steps,
+                guidance=guidance,
+                seed=seed,
+                output_path=output_path,
+                callback=_step_callback,
+            )
+    finally:
+        if engine_instance is None:
+            engine.cleanup()
 
     console.print(f"[bold green]Saved:[/bold green] {saved}")
     try:
@@ -212,9 +216,10 @@ def batch(
     # Cache engine instances so we don't reload the model for every file.
     engine_cache: dict[str, object] = {}
 
+    n_files = len(files)
     successes, failures = 0, 0
     for i, f in enumerate(files):
-        console.rule(f"[bold]{i + 1}/{len(files)}[/bold] — {f.name}")
+        console.rule(f"[bold]{i + 1}/{n_files}[/bold] — {f.name}")
         try:
             doc = parse_prompt_file(f)
             engine_name = engine or doc.engine or cfg["engine"]
