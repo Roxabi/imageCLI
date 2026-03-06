@@ -199,6 +199,7 @@ def test_generate_shows_peak_vram(tmp_path: Path):
     mock_engine.name = "flux2-klein"
     mock_engine.description = "test engine"
     mock_engine.generate.return_value = fake_img
+    mock_engine.effective_steps.return_value = 20  # must be int for Rich progress bar
 
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
@@ -213,3 +214,42 @@ def test_generate_shows_peak_vram(tmp_path: Path):
     assert result.exit_code == 0
     assert "Peak VRAM reserved" in result.output
     assert "8.50 GB" in result.output
+
+
+# ── progress bar ─────────────────────────────────────────────────────────────
+
+
+def test_run_generate_passes_callback_to_engine(tmp_path: Path):
+    # Arrange: mock at the engine level so _run_generate runs its full body.
+    mock_engine = MagicMock()
+    mock_engine.name = "flux2-klein"
+    mock_engine.description = "test engine"
+    mock_engine.generate.return_value = tmp_path / "out.png"
+    mock_engine.effective_steps.return_value = 20  # must be int for Rich progress bar
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+    ):
+        from imagecli.cli import _run_generate
+
+        _run_generate(
+            "a test prompt",
+            "",
+            "flux2-klein",
+            512,
+            512,
+            20,
+            4.0,
+            None,
+            "png",
+            tmp_path / "out.png",
+        )
+
+    # Assert: engine.generate was called with a non-None callback kwarg.
+    call_kwargs = mock_engine.generate.call_args.kwargs
+    assert "callback" in call_kwargs
+    assert call_kwargs["callback"] is not None
+
+    # Assert: cleanup() was called once (engine_instance is None → single-image path).
+    mock_engine.cleanup.assert_called_once()

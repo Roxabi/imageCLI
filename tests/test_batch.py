@@ -150,3 +150,22 @@ def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path)
     assert "2 failed" in result.output
     # Cleanup must still be called even when all generations fail
     mock_engine.cleanup.assert_called_once()
+
+
+@patch("imagecli.cli._run_generate")
+@patch("imagecli.engine.get_engine")
+def test_batch_shows_file_index(mock_get_engine, mock_run, tmp_path: Path):
+    mock_engine = MagicMock()
+    mock_engine.cleanup = MagicMock()
+    mock_get_engine.return_value = mock_engine
+    mock_run.return_value = Path("/fake/out.png")
+
+    _make_md(tmp_path / "a.md")
+    _make_md(tmp_path / "b.md")
+    _make_md(tmp_path / "c.md")
+
+    result = runner.invoke(app, ["batch", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "1/3" in result.output
+    assert "2/3" in result.output
+    assert "3/3" in result.output
