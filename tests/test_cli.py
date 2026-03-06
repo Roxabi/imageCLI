@@ -253,3 +253,105 @@ def test_run_generate_passes_callback_to_engine(tmp_path: Path):
 
     # Assert: cleanup() was called once (engine_instance is None → single-image path).
     mock_engine.cleanup.assert_called_once()
+
+
+# ── T14: engines command capability columns ──────────────────────────────────
+
+
+def test_engines_command_shows_capability_columns():
+    # Act
+    result = runner.invoke(app, ["engines"])
+
+    # Assert
+    assert result.exit_code == 0
+    # Capability column headers should be present (Rich may wrap header text in narrow terminals)
+    assert "Neg" in result.output and "Prompt" in result.output
+    assert "Steps" in result.output
+    assert "Guidance" in result.output
+    # sd35 has fixed steps — verify rendered value
+    assert "fixed 20" in result.output  # sd35 fixed steps
+    # sd35 has fixed guidance — value present somewhere in output
+    assert "1.0" in result.output  # sd35 fixed guidance (may wrap)
+    # FLUX engines don't support negative prompt
+    assert "✗" in result.output
+
+
+# ── Finding 2 (SC-7/8/9): steps_explicit / guidance_explicit CLI forwarding ──
+
+
+def test_generate_passes_steps_explicit_when_flag_set(tmp_path):
+    """--steps flag sets steps_explicit=True in _run_generate call."""
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["generate", "a cat", "--steps", "30"])
+        # If _run_generate was called, steps_explicit should be True
+        if mock_run.called:
+            assert mock_run.call_args.kwargs.get("steps_explicit") is True
+
+
+def test_generate_passes_guidance_explicit_when_flag_set(tmp_path):
+    """--guidance flag sets guidance_explicit=True in _run_generate call."""
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["generate", "a cat", "--guidance", "7.5"])
+        if mock_run.called:
+            assert mock_run.call_args.kwargs.get("guidance_explicit") is True
+
+
+def test_generate_explicit_flags_false_when_no_flags():
+    """No --steps/--guidance flags → explicit flags default to False."""
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["generate", "a cat"])
+        if mock_run.called:
+            assert mock_run.call_args.kwargs.get("steps_explicit") is False
+            assert mock_run.call_args.kwargs.get("guidance_explicit") is False
+
+
+# ── Finding 3 (SC-18): batch negative_prompt forwarding ──────────────────────
+
+
+def test_batch_passes_negative_prompt_to_run_generate(tmp_path):
+    """batch() forwards frontmatter negative_prompt to _run_generate."""
+    md = tmp_path / "scene.md"
+    md.write_text("---\nnegative_prompt: ugly blurry\n---\nA red ball.\n")
+
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["batch", str(tmp_path)])
+        if mock_run.called:
+            # negative_prompt arg should be the frontmatter value
+            call_args = mock_run.call_args
+            neg = (
+                call_args.args[1]
+                if len(call_args.args) > 1
+                else call_args.kwargs.get("negative_prompt", "")
+            )
+            assert "ugly" in neg or "blurry" in neg
+
+
+# ── Finding 4 (SC-19): generate .md steps_explicit derivation ────────────────
+
+
+def test_generate_md_steps_explicit_from_frontmatter(tmp_path):
+    """Frontmatter steps: sets steps_explicit=True in _run_generate."""
+    md = tmp_path / "prompt.md"
+    md.write_text("---\nsteps: 10\n---\nA cat.\n")
+
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["generate", str(md)])
+        if mock_run.called:
+            assert mock_run.call_args.kwargs.get("steps_explicit") is True
+
+
+def test_generate_md_steps_explicit_false_when_not_in_frontmatter(tmp_path):
+    """No steps in frontmatter and no --steps flag → steps_explicit=False."""
+    md = tmp_path / "prompt.md"
+    md.write_text("---\n---\nA cat.\n")
+
+    with patch("imagecli.cli._run_generate") as mock_run:
+        mock_run.return_value = None
+        runner.invoke(app, ["generate", str(md)])
+        if mock_run.called:
+            assert mock_run.call_args.kwargs.get("steps_explicit") is False

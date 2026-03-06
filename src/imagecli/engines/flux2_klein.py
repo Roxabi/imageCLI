@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine
+from imagecli.engine import EngineCapabilities, ImageEngine
 
 
 class Flux2KleinEngine(ImageEngine):
@@ -10,6 +10,7 @@ class Flux2KleinEngine(ImageEngine):
     description = "FLUX.2-klein-4B — best quality for 16GB VRAM (Black Forest Labs, Nov 2025)"
     model_id = "black-forest-labs/FLUX.2-klein-4B"
     vram_gb = 13.0
+    capabilities = EngineCapabilities(negative_prompt=False)
 
     def _load(self):
         if self._pipe is not None:

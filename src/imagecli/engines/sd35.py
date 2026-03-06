@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine
+from imagecli.engine import EngineCapabilities, ImageEngine
 
 
 class SD35Engine(ImageEngine):
@@ -10,6 +10,8 @@ class SD35Engine(ImageEngine):
     description = "Stable Diffusion 3.5 Large Turbo — fast 20-step generation (Stability AI)"
     model_id = "stabilityai/stable-diffusion-3.5-large-turbo"
     vram_gb = 14.0
+    # negative_prompt=True stays as default (sd35 supports it)
+    capabilities = EngineCapabilities(fixed_steps=20, fixed_guidance=1.0)
 
     def _load(self):
         if self._pipe is not None:

@@ -200,3 +200,266 @@ def test_generate_no_callback_omits_kwarg(tmp_path: Path):
         "guidance_scale",
         "generator",
     }
+
+
+# ── T12: EngineCapabilities declarations ────────────────────────────────────
+
+
+def test_engine_capabilities_dataclass():
+    # Arrange / Act
+    from imagecli.engine import EngineCapabilities
+
+    caps = EngineCapabilities()
+
+    # Assert: defaults match spec
+    assert caps.negative_prompt is True
+    assert caps.fixed_steps is None
+    assert caps.fixed_guidance is None
+
+
+def test_image_engine_default_capabilities():
+    # Arrange / Act
+    from imagecli.engine import EngineCapabilities, ImageEngine
+
+    # Assert: base class has capabilities class attribute with correct defaults
+    assert hasattr(ImageEngine, "capabilities")
+    assert isinstance(ImageEngine.capabilities, EngineCapabilities)
+    assert ImageEngine.capabilities.negative_prompt is True
+    assert ImageEngine.capabilities.fixed_steps is None  # ADD THIS
+    assert ImageEngine.capabilities.fixed_guidance is None  # ADD THIS
+
+
+def test_flux2_klein_capabilities():
+    # Arrange / Act
+    from imagecli.engines.flux2_klein import Flux2KleinEngine
+
+    # Assert: flux2-klein does NOT support negative_prompt; steps/guidance not fixed
+    assert Flux2KleinEngine.capabilities.negative_prompt is False
+    assert Flux2KleinEngine.capabilities.fixed_steps is None
+    assert Flux2KleinEngine.capabilities.fixed_guidance is None
+
+
+def test_flux1_dev_capabilities():
+    # Arrange / Act
+    from imagecli.engines.flux1_dev import Flux1DevEngine
+
+    # Assert: flux1-dev does NOT support negative_prompt; steps/guidance not fixed
+    assert Flux1DevEngine.capabilities.negative_prompt is False
+    assert Flux1DevEngine.capabilities.fixed_steps is None
+    assert Flux1DevEngine.capabilities.fixed_guidance is None
+
+
+def test_flux1_schnell_capabilities():
+    # Arrange / Act
+    from imagecli.engines.flux1_schnell import Flux1SchnellEngine
+
+    # Assert: flux1-schnell does NOT support negative_prompt; steps NOT fixed, guidance fixed at 0.0
+    assert Flux1SchnellEngine.capabilities.negative_prompt is False
+    assert Flux1SchnellEngine.capabilities.fixed_steps is None  # steps NOT fixed
+    assert Flux1SchnellEngine.capabilities.fixed_guidance == 0.0
+
+
+def test_sd35_capabilities():
+    # Arrange / Act
+    from imagecli.engines.sd35 import SD35Engine
+
+    # Assert: sd35 DOES support negative_prompt; steps fixed at 20, guidance fixed at 1.0
+    assert SD35Engine.capabilities.negative_prompt is True  # sd35 supports it
+    assert SD35Engine.capabilities.fixed_steps == 20
+    assert SD35Engine.capabilities.fixed_guidance == 1.0
+
+
+# ── T13: warn_ignored_params ─────────────────────────────────────────────────
+
+
+def test_warn_negative_prompt_flux2_klein(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux2-klein")
+
+    # Act
+    warn_ignored_params(
+        engine,
+        "ugly blurry",
+        50,
+        4.0,
+        negative_explicit=True,
+        steps_explicit=False,
+        guidance_explicit=False,
+    )
+    captured = capsys.readouterr()
+
+    # Assert: warning about negative_prompt printed to stderr
+    assert "negative_prompt" in captured.err
+
+
+def test_warn_negative_prompt_flux1_schnell(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux1-schnell")
+
+    # Act
+    warn_ignored_params(
+        engine,
+        "ugly",
+        4,
+        0.0,
+        negative_explicit=True,
+        steps_explicit=False,
+        guidance_explicit=False,
+    )
+    captured = capsys.readouterr()
+
+    # Assert: warning about negative_prompt printed to stderr
+    assert "negative_prompt" in captured.err
+
+
+def test_warn_steps_sd35_explicit(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("sd35")
+
+    # Act: user explicitly set steps=30 but sd35 fixes them at 20
+    warn_ignored_params(
+        engine, "", 30, 4.0, negative_explicit=False, steps_explicit=True, guidance_explicit=False
+    )
+    captured = capsys.readouterr()
+
+    # Assert: warning about steps printed to stderr
+    assert "steps" in captured.err
+
+
+def test_warn_guidance_sd35_explicit(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("sd35")
+
+    # Act: user explicitly set guidance=7.5 but sd35 fixes it at 1.0
+    warn_ignored_params(
+        engine, "", 50, 7.5, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
+    captured = capsys.readouterr()
+
+    # Assert: warning about guidance printed to stderr
+    assert "guidance" in captured.err
+
+
+def test_warn_guidance_flux1_schnell_explicit(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux1-schnell")
+
+    # Act: user explicitly set guidance=7.5 but schnell fixes it at 0.0
+    warn_ignored_params(
+        engine, "", 4, 7.5, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
+    captured = capsys.readouterr()
+
+    # Assert: warning about guidance printed to stderr
+    assert "guidance" in captured.err
+
+
+def test_no_warn_steps_flux2_klein_supported(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux2-klein")
+
+    # Act: steps are supported on flux2-klein — no warning expected
+    warn_ignored_params(
+        engine, "", 30, 4.0, negative_explicit=False, steps_explicit=True, guidance_explicit=False
+    )
+    captured = capsys.readouterr()
+
+    # Assert: no warning about steps
+    assert "steps" not in captured.err
+
+
+def test_no_warn_guidance_schnell_matches_fixed(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux1-schnell")
+
+    # Act: user explicitly set guidance=0.0 which matches the fixed value — no warning
+    warn_ignored_params(
+        engine, "", 4, 0.0, negative_explicit=False, steps_explicit=False, guidance_explicit=True
+    )
+    captured = capsys.readouterr()
+
+    # Assert: no warning about guidance when value matches fixed value
+    assert "guidance" not in captured.err
+
+
+def test_no_warn_steps_sd35_not_explicit(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("sd35")
+
+    # Act: steps=50 would conflict with fixed_steps=20, but steps_explicit=False (came from config)
+    warn_ignored_params(
+        engine, "", 50, 4.0, negative_explicit=False, steps_explicit=False, guidance_explicit=False
+    )
+    captured = capsys.readouterr()
+
+    # Assert: no warning when steps were not explicitly set by the user
+    assert "steps" not in captured.err
+
+
+def test_no_warn_empty_negative_flux2_klein(capsys):
+    # Arrange
+    from imagecli.engine import get_engine, warn_ignored_params
+
+    engine = get_engine("flux2-klein")
+
+    # Act: empty negative_prompt — nothing to warn about
+    warn_ignored_params(
+        engine, "", 50, 4.0, negative_explicit=False, steps_explicit=False, guidance_explicit=False
+    )
+    captured = capsys.readouterr()
+
+    # Assert: no output at all on stderr
+    assert captured.err == ""
+
+
+# ── T14: list_engines capabilities key ──────────────────────────────────────
+
+
+def test_list_engines_has_capabilities_key():
+    # Act
+    engines = list_engines()
+
+    # Assert: every engine dict includes a 'capabilities' key with the expected shape
+    for e in engines:
+        assert "capabilities" in e, f"Engine {e['name']} missing 'capabilities' key"
+        caps = e["capabilities"]
+        assert "negative_prompt" in caps
+        assert "fixed_steps" in caps
+        assert "fixed_guidance" in caps
+
+
+def test_list_engines_sd35_capabilities_values():
+    # Act
+    engines = {e["name"]: e for e in list_engines()}
+    sd35 = engines["sd35"]["capabilities"]
+
+    # Assert: sd35 capability values match spec
+    assert sd35["fixed_steps"] == 20
+    assert sd35["fixed_guidance"] == 1.0
+    assert sd35["negative_prompt"] is True
+
+
+def test_list_engines_flux2_klein_capabilities_values():
+    # Act
+    engines = {e["name"]: e for e in list_engines()}
+    caps = engines["flux2-klein"]["capabilities"]
+
+    # Assert: flux2-klein capability values match spec
+    assert caps["negative_prompt"] is False
+    assert caps["fixed_steps"] is None
