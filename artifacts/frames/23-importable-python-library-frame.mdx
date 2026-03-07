@@ -1,0 +1,41 @@
+---
+title: "feat: expose imageCLI as an importable Python library"
+issue: 23
+status: approved
+tier: F-lite
+date: 2026-03-07
+---
+
+## Problem
+
+imageCLI is currently CLI-only — the only way to generate images is via `uv run imagecli generate`. Other Python projects that want to use image generation must shell out to the CLI, losing type safety, error handling, and programmatic control.
+
+The core logic (`engine.py`, `config.py`, `markdown.py`) is already cleanly separated from CLI concerns (`cli.py` with Typer/Rich). However, `__init__.py` exports nothing, so `from imagecli import generate` doesn't work.
+
+**Open question from user:** Is a public API actually needed right now? The motivation from the issue is consistency with roxabi-memory (which is already a library) and enabling integration from other Python projects/pipelines. If no concrete consumer exists yet, this may be premature.
+
+## Who
+
+- **Primary:** Developers integrating image generation into Python scripts, services, or pipelines (e.g. roxabi-memory workflows)
+- **Secondary:** imageCLI maintainers — a clean public API clarifies what's stable vs. internal
+
+## Constraints
+
+- CLI must remain unchanged — library API is purely additive
+- Core logic is already decoupled; this is mostly about exporting and documenting
+
+## Out of Scope
+
+- CLI refactoring — `cli.py` internals stay as-is
+- PyPI publishing / packaging workflow
+- Async API — sync-only is fine for GPU-bound work
+- Batch API — users can loop `generate()` themselves
+
+## Complexity
+
+**Tier: F-lite** — Clear scope, single domain.
+
+- `engine.py` already exposes `get_engine()`, `list_engines()`, `ImageEngine`, `preflight_check()`
+- `config.py` has `load_config()`
+- Main work: populate `__init__.py` with re-exports, possibly add a convenience `generate()` wrapper, write API docs
+- Estimated ~3-5 files touched, no architectural changes
