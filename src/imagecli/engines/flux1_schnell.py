@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from imagecli.engine import ImageEngine, get_compute_capability
+from imagecli.engine import EngineCapabilities, ImageEngine, get_compute_capability
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,8 @@ class Flux1SchnellEngine(ImageEngine):
     description = "FLUX.1-schnell quantized — Apache 2.0, fast 4-step generation, ~10GB VRAM (Black Forest Labs)"
     model_id = "black-forest-labs/FLUX.1-schnell"
     vram_gb = 10.0
+    # steps are NOT fixed (user can override the 4-step default)
+    capabilities = EngineCapabilities(negative_prompt=False, fixed_guidance=0.0)
 
     def _load(self):
         if self._pipe is not None:
