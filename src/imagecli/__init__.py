@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from imagecli.engine import (
     preflight_check,
 )
 from imagecli.markdown import PromptDoc, parse_prompt_file
+
+# Ensure library consumers don't get unsuppressable stderr output from
+# logger.warning() calls in engine.py when they haven't configured logging.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "ImageEngine",
@@ -54,12 +59,12 @@ def generate(
         warnings.simplefilter("ignore")
         cfg = load_config()
 
-    engine_name = engine or cfg["engine"]
-    w = width or cfg["width"]
-    h = height or cfg["height"]
-    s = steps or cfg["steps"]
-    g = guidance or cfg["guidance"]
-    fmt = format or cfg.get("format", "png")
+    engine_name = engine if engine is not None else cfg["engine"]
+    w = width if width is not None else cfg["width"]
+    h = height if height is not None else cfg["height"]
+    s = steps if steps is not None else cfg["steps"]
+    g = guidance if guidance is not None else cfg["guidance"]
+    fmt = format if format is not None else cfg.get("format", "png")
 
     if output_path is not None:
         out = Path(output_path)

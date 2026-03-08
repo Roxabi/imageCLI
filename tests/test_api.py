@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 def test_all_exports_importable():
@@ -53,31 +55,46 @@ def test_all_matches_public_names():
 
 def test_no_cli_imports_at_module_level():
     """Importing imagecli does NOT cause typer or rich to appear in sys.modules."""
-    # Arrange: remove imagecli from sys.modules so the import runs fresh
-    keys_to_remove = [k for k in sys.modules if k == "imagecli" or k.startswith("imagecli.")]
-    for k in keys_to_remove:
-        del sys.modules[k]
-
-    # Also remove typer/rich if already loaded from a previous test so the check is meaningful
-    cli_keys_before = {
-        k
-        for k in sys.modules
-        if k == "typer" or k.startswith("typer.") or k == "rich" or k.startswith("rich.")
+    # Arrange: snapshot imagecli.* modules so we can restore after the test.
+    # Without restore, the wipe creates a module identity split that breaks
+    # patches in subsequent tests (they patch V2 objects while test fixtures
+    # hold references to V1 objects).
+    snapshot = {
+        k: v for k, v in sys.modules.items() if k == "imagecli" or k.startswith("imagecli.")
     }
+    try:
+        keys_to_remove = list(snapshot.keys())
+        for k in keys_to_remove:
+            del sys.modules[k]
 
-    # Act
-    import imagecli  # noqa: F401  (re-import after cache clear)
+        # Record which typer/rich modules were already in sys.modules before the
+        # re-import so we can detect newly introduced ones.
+        cli_keys_before = {
+            k
+            for k in sys.modules
+            if k == "typer" or k.startswith("typer.") or k == "rich" or k.startswith("rich.")
+        }
 
-    # Assert
-    new_cli_keys = {
-        k
-        for k in sys.modules
-        if (k == "typer" or k.startswith("typer.") or k == "rich" or k.startswith("rich."))
-        and k not in cli_keys_before
-    }
-    assert not new_cli_keys, (
-        f"Importing imagecli introduced CLI-only modules into sys.modules: {new_cli_keys}"
-    )
+        # Act
+        import imagecli  # noqa: F401  (re-import after cache clear)
+
+        # Assert
+        new_cli_keys = {
+            k
+            for k in sys.modules
+            if (k == "typer" or k.startswith("typer.") or k == "rich" or k.startswith("rich."))
+            and k not in cli_keys_before
+        }
+        assert not new_cli_keys, (
+            f"Importing imagecli introduced CLI-only modules into sys.modules: {new_cli_keys}"
+        )
+    finally:
+        # Restore: remove any fresh imagecli.* entries from the re-import,
+        # then put back the original module objects.
+        for k in list(sys.modules):
+            if k == "imagecli" or k.startswith("imagecli."):
+                del sys.modules[k]
+        sys.modules.update(snapshot)
 
 
 def test_generate_signature():
@@ -132,3 +149,55 @@ def test_generate_is_callable():
 
     # Act + Assert
     assert callable(imagecli.generate), "imagecli.generate is not callable"
+
+
+def test_generate_calls_engine_and_cleanup():
+    """generate() orchestrates preflight, engine.generate, and cleanup in finally."""
+    # Arrange
+    import imagecli
+
+    mock_engine = MagicMock()
+    mock_engine.generate.return_value = Path("/fake/out.png")
+
+    with (
+        patch.object(imagecli, "get_engine", return_value=mock_engine) as mock_get,
+        patch.object(imagecli, "preflight_check") as mock_preflight,
+        patch("imagecli._utils.resolve_output", return_value=Path("/fake/out.png")),
+    ):
+        # Act
+        result = imagecli.generate("a test prompt")
+
+    # Assert: returns the path from engine.generate
+    assert result == Path("/fake/out.png")
+    # Assert: engine was instantiated with default config engine name
+    mock_get.assert_called_once()
+    # Assert: preflight was called before generation
+    mock_preflight.assert_called_once_with(mock_engine)
+    # Assert: engine.generate was called with the prompt
+    mock_engine.generate.assert_called_once()
+    assert mock_engine.generate.call_args.args[0] == "a test prompt"
+    # Assert: cleanup was called (even though no error occurred)
+    mock_engine.cleanup.assert_called_once()
+
+
+def test_generate_cleanup_called_on_failure():
+    """generate() calls cleanup even when engine.generate raises."""
+    # Arrange
+    import imagecli
+
+    mock_engine = MagicMock()
+    mock_engine.generate.side_effect = RuntimeError("generation failed")
+
+    with (
+        patch.object(imagecli, "get_engine", return_value=mock_engine),
+        patch.object(imagecli, "preflight_check"),
+        patch("imagecli._utils.resolve_output", return_value=Path("/fake/out.png")),
+    ):
+        # Act
+        try:
+            imagecli.generate("a test prompt")
+        except RuntimeError:
+            pass
+
+    # Assert: cleanup was still called despite the failure
+    mock_engine.cleanup.assert_called_once()
