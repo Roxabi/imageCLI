@@ -19,6 +19,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from imagecli._utils import resolve_output as _resolve_output
+
 app = typer.Typer(
     name="imagecli",
     help="Local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends.",
@@ -39,19 +41,6 @@ def _load_config() -> dict:
     for w in caught:
         Console(stderr=True).print(f"[yellow]Warning:[/yellow] {w.message}")
     return cfg
-
-
-def _resolve_output(cfg: dict, stem: str, fmt: str, output_dir: str | None) -> Path:
-    out_dir = Path(output_dir or cfg.get("output_dir", "images/images_out"))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ext = fmt.lstrip(".")
-    # avoid clobbering: add suffix if file exists
-    candidate = out_dir / f"{stem}.{ext}"
-    n = 1
-    while candidate.exists():
-        candidate = out_dir / f"{stem}_{n}.{ext}"
-        n += 1
-    return candidate
 
 
 def _run_generate(

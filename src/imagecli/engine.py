@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import os
 from abc import ABC, abstractmethod
 import dataclasses
@@ -13,6 +14,8 @@ from typing import ClassVar
 
 # Minimum free system RAM (in GB) required to start loading a model.
 # model_cpu_offload shuffles layers through CPU, so we need headroom.
+logger = logging.getLogger(__name__)
+
 MIN_FREE_RAM_GB = float(os.environ.get("IMAGECLI_MIN_FREE_RAM_GB", "4.0"))
 
 # Process-global flag — set_float32_matmul_precision only needs to be called once.
@@ -154,7 +157,9 @@ class ImageEngine(ABC):
                 compilable = pipe.unet
             if compilable is not None:
                 pipe_attr = "transformer" if hasattr(pipe, "transformer") else "unet"
-                print(f"Compiling {pipe_attr} with torch.compile (first run will be slower) …")
+                logger.info(
+                    "Compiling %s with torch.compile (first run will be slower)...", pipe_attr
+                )
                 setattr(
                     pipe,
                     pipe_attr,
@@ -185,8 +190,8 @@ class ImageEngine(ABC):
                 "Install it with: uv add optimum[quanto]"
             ) from e
         except (RuntimeError, ValueError) as e:
-            print(
-                f"Warning: quantization failed ({e}), proceeding with bf16 (~20GB VRAM required)."
+            logger.warning(
+                "Quantization failed (%s), proceeding with bf16 (~20GB VRAM required).", e
             )
             return "bf16"
 

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from imagecli.engine import EngineCapabilities, ImageEngine
+
+logger = logging.getLogger(__name__)
 
 
 class Flux2KleinEngine(ImageEngine):
@@ -18,10 +22,10 @@ class Flux2KleinEngine(ImageEngine):
         import torch
         from diffusers import Flux2KleinPipeline
 
-        print(f"Loading {self.model_id} …")
+        logger.info("Loading %s...", self.model_id)
         self._pipe = Flux2KleinPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
         self._finalize_load(self._pipe)
-        print("Model ready.")
+        logger.info("Model ready.")

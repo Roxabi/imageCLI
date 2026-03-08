@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from imagecli.engine import EngineCapabilities, ImageEngine, get_compute_capability
+
+logger = logging.getLogger(__name__)
 
 
 class Flux1DevEngine(ImageEngine):
@@ -20,12 +24,12 @@ class Flux1DevEngine(ImageEngine):
 
         sm = get_compute_capability()
         qtype_label = "fp8" if sm >= (8, 9) else "int8"
-        print(f"Loading {self.model_id} ({qtype_label}) …")
+        logger.info("Loading %s (%s)...", self.model_id, qtype_label)
         self._pipe = FluxPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
         actual_qtype = self._quantize_transformer(self._pipe, sm)
-        print(f"Transformer quantized to {actual_qtype}.")
+        logger.info("Transformer quantized to %s.", actual_qtype)
         self._finalize_load(self._pipe)
-        print("Model ready.")
+        logger.info("Model ready.")
