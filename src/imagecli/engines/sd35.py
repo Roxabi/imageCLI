@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from imagecli.engine import ImageEngine
+
+logger = logging.getLogger(__name__)
 
 
 class SD35Engine(ImageEngine):
@@ -17,7 +21,7 @@ class SD35Engine(ImageEngine):
         import torch
         from diffusers import StableDiffusion3Pipeline  # type: ignore[import-untyped]
 
-        print(f"Loading {self.model_id} …")
+        logger.info("Loading %s...", self.model_id)
         self._pipe = StableDiffusion3Pipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
@@ -28,12 +32,12 @@ class SD35Engine(ImageEngine):
 
             quantize(self._pipe.text_encoder_3, weights=qint8)
             freeze(self._pipe.text_encoder_3)
-            print("T5 encoder quantized to int8.")
+            logger.info("T5 encoder quantized to int8.")
         except Exception as e:
-            print(f"Warning: T5 quantization failed ({e}), using bf16.")
+            logger.warning("T5 quantization failed (%s), using bf16.", e)
 
         self._finalize_load(self._pipe)
-        print("Model ready.")
+        logger.info("Model ready.")
 
     def effective_steps(self, requested: int) -> int:
         # Turbo always runs exactly 20 steps regardless of what the caller requested.

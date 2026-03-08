@@ -124,7 +124,8 @@ Hardcoded defaults when no config file is found: `engine="flux2-klein"`, `width=
 - Calls `load_config()` internally to resolve defaults. `UserWarning` is suppressed if no config file is found.
 - Calls `preflight_check()` before loading the model. Raises `InsufficientResourcesError` if VRAM or RAM is insufficient.
 - Calls `eng.cleanup()` in a `finally` block — VRAM is freed even if generation fails.
-- Output files are never overwritten. When `output_path` is not set, the suffix `_1`, `_2`, etc. is appended automatically.
+- Output files are never overwritten. When `output_path` is not set, the suffix `_1`, `_2`, etc. is appended automatically. When `output_path` is set explicitly, no anti-clobber is applied — the caller controls the exact path.
+- **Security note:** `output_path` and `output_dir` are used as-is without path validation. If your application accepts paths from untrusted input, validate them before passing to `generate()`.
 
 **Raises:**
 

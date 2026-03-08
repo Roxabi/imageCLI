@@ -56,7 +56,7 @@ def generate(
     from imagecli._utils import resolve_output
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.filterwarnings("ignore", category=UserWarning, module=r"imagecli\.config")
         cfg = load_config()
 
     engine_name = engine if engine is not None else cfg["engine"]
@@ -65,6 +65,12 @@ def generate(
     s = steps if steps is not None else cfg["steps"]
     g = guidance if guidance is not None else cfg["guidance"]
     fmt = format if format is not None else cfg.get("format", "png")
+
+    _ALLOWED_FORMATS = {"png", "jpg", "webp"}
+    if fmt not in _ALLOWED_FORMATS:
+        raise ValueError(
+            f"Unsupported format {fmt!r}. Must be one of: {', '.join(sorted(_ALLOWED_FORMATS))}"
+        )
 
     if output_path is not None:
         out = Path(output_path)
