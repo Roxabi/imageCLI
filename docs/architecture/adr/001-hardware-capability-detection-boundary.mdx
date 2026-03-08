@@ -1,0 +1,120 @@
+---
+title: "ADR-001: Hardware Capability Detection Belongs in engine.py, Not in cli.py"
+description: Establish engine.py as the single owner of all GPU hardware interrogation logic, keeping cli.py pure display/orchestration.
+---
+
+## Status
+
+Accepted
+
+## Context
+
+PR #3 introduced `_get_compute_capability()` in `engine.py` so that FLUX.1 engines
+can select fp8 vs int8 quantization weights at load time based on GPU compute capability
+(qfloat8 for sm >= (8,9), qint8 otherwise). The same PR also added an arch-name lookup
+dict keyed on `dev.major` inside `cli.py:info()` to display a human-readable GPU
+architecture label.
+
+This created two independent implementations of the same hardware-interrogation concern:
+
+- `engine.py` — `_get_compute_capability()` returning `(major, minor)` tuple, used by engines during `_load()`
+- `cli.py` — inline `{12: "Blackwell", ...}.get(dev.major, "Unknown")` dict, used for display
+
+The inline dict in `cli.py` also contained a correctness defect: Ada Lovelace (sm_89,
+major=8, minor=9) and Ampere (sm_80/sm_86, major=8, minor=0/6) share major=8, causing
+a silent dict-key collision that resolves to whichever entry appears last — meaning one
+architecture is always misidentified.
+
+The existing architecture places all hardware-facing logic in `engine.py`
+(`preflight_check`, `mem_get_info` calls, `set_per_process_memory_fraction`) and all
+display/formatting logic in `cli.py`. This PR introduced the first violation of that
+boundary.
+
+## Options Considered
+
+### Option A: Keep detection split between engine.py and cli.py
+
+`engine.py` owns the `(major, minor)` tuple for quantization decisions. `cli.py`
+independently maps `dev.major` to an arch string for display.
+
+- **Pros:** No API changes to `engine.py`; each callsite gets only what it needs.
+- **Cons:** Duplicates hardware-interrogation logic; the arch-name mapping lives
+  outside the module that understands compute capability; the `dev.major`-only key
+  causes an Ada Lovelace / Ampere collision; future callers (e.g. a `--verbose` flag)
+  must rediscover and copy the lookup table again.
+
+### Option B: Centralise all hardware detection in engine.py via a public get_gpu_info()
+
+Expose a single `get_gpu_info() -> dict` function from `engine.py` returning
+`{"name": str, "arch": str, "vram_gb": float, "compute_capability": tuple[int, int]}`.
+`cli.py` calls it and formats the result. Zero hardware logic in the CLI.
+
+- **Pros:** Single source of truth; arch-name mapping lives next to compute-capability
+  logic; `cli.py` becomes pure display; corrects the major-only collision by keying on
+  `(major, minor)` tuples internally; consistent with the `preflight_check` precedent.
+- **Cons:** Slightly larger surface area in `engine.py`; `get_gpu_info()` must guard
+  against `torch` not being installed (same pattern as `preflight_check` already does).
+
+### Option C: Move arch-name resolution into ImageEngine as a @staticmethod
+
+Add `ImageEngine.get_compute_capability() -> tuple[int, int]` and
+`ImageEngine.arch_name(major: int, minor: int) -> str` as static methods. Engines and
+`cli.py` both call class methods.
+
+- **Pros:** Keeps hardware knowledge inside the class hierarchy; no new module-level
+  functions.
+- **Cons:** `get_gpu_info` is not engine-instance-specific, so attaching it to the
+  class is slightly misleading; engines would import from the class they already inherit
+  from, which is fine, but `cli.py` importing from `ImageEngine` for display purposes
+  blurs the role of the class.
+
+## Decision
+
+**Option B** is adopted.
+
+`engine.py` is the single module responsible for all GPU hardware interrogation. A
+public `get_gpu_info()` function is added there, returning a typed dict with `name`,
+`arch`, `vram_gb`, and `compute_capability`. The arch-name mapping keys on
+`(major, minor)` tuples rather than `major` alone to avoid the Ada Lovelace / Ampere
+collision. `cli.py:info()` calls `get_gpu_info()` and formats the result; no
+hardware-detection logic remains in the CLI layer.
+
+`_get_compute_capability()` is renamed to `get_compute_capability()` (public, no leading
+underscore) since it is explicitly imported by engine submodules and is therefore part
+of the module's interface.
+
+The repeated quantization-selection block in `flux1_dev.py` and `flux1_schnell.py` is
+extracted into a `_quantize_transformer(pipe, component)` protected method on
+`ImageEngine`, consistent with how `_finalize_load` and `_optimize_pipe` already
+centralise shared load-time steps.
+
+## Consequences
+
+### Positive
+
+- The Ada Lovelace / Ampere arch-name collision is eliminated by design.
+- All hardware-interrogation code has one home; grep for `get_device_properties` yields
+  one file.
+- Adding a new GPU generation requires editing exactly one place (`engine.py` arch map)
+  rather than hunting across CLI and engine files.
+- Future engines that need adaptive quantization call `self._quantize_transformer(...)`
+  rather than reimplementing the capability check and try/except pattern.
+- `cli.py` contains no `torch.cuda` calls for capability detection; it remains testable
+  without a GPU for display-logic unit tests.
+
+### Negative
+
+- `engine.py` grows slightly: `get_gpu_info()`, `get_compute_capability()`, and a
+  `(major, minor)` arch-name map are added. Acceptable given the module already owns
+  all hardware-facing logic.
+- Engine subclasses that previously called `_get_compute_capability()` directly must be
+  updated to use `get_compute_capability()` (trivial rename, no behaviour change).
+
+### Neutral
+
+- `_quantize_transformer()` on `ImageEngine` handles the optimum.quanto try/except
+  pattern. Engines that do not use adaptive quantization (SD3.5, FLUX.2-klein) are
+  unaffected — they simply do not call the method.
+- The `get_gpu_info()` function follows the same deferred-import pattern as the rest
+  of `engine.py`: `torch` is imported inside the function body, keeping `imagecli info`
+  instant if torch is absent.
