@@ -1,0 +1,10 @@
+# dev-core plugin configuration
+# 3-tier fallback: this file → process.env → gh CLI (github_repo only)
+github_repo: Roxabi/imageCLI
+gh_project_id: PVT_kwDOB8J6DM4BQzJC
+status_field_id: PVTSSF_lADOB8J6DM4BQzJCzg-0JW0
+size_field_id: PVTSSF_lADOB8J6DM4BQzJCzg-0JZQ
+priority_field_id: PVTSSF_lADOB8J6DM4BQzJCzg-0JZU
+status_options_json: '{"Backlog":"827ee4c4","Analysis":"e61b83a6","Specs":"e593d981","In Progress":"5b150a96","Review":"c3b5cf7f","Done":"26220d76"}'
+size_options_json: '{"XS":"54f553c9","S":"c64a07ba","M":"50814255","L":"d6c88cd4","XL":"d29ce521"}'
+priority_options_json: '{"P0 - Urgent":"ff8df61b","P1 - High":"515bbc45","P2 - Medium":"26e57370","P3 - Low":"27b2f327"}'
