@@ -13,10 +13,24 @@ from pathlib import Path
 from typing import ClassVar
 
 # Minimum free system RAM (in GB) required to start loading a model.
-# model_cpu_offload shuffles layers through CPU, so we need headroom.
 logger = logging.getLogger(__name__)
 
 MIN_FREE_RAM_GB = float(os.environ.get("IMAGECLI_MIN_FREE_RAM_GB", "4.0"))
+
+# Hard cap on this process's virtual address space.
+# When VRAM is sufficient the model stays on GPU and RAM usage is low (~2-4 GB).
+# If CPU offload is triggered (VRAM too small), RAM can balloon to 70+ GB and OOM-kill WSL.
+# Default: 8 GB — enough for GPU-only mode, kills runaway CPU offload early.
+# Set IMAGECLI_MAX_RAM_GB=0 to disable, or raise it if you intentionally use CPU offload.
+_max_ram_gb = float(os.environ.get("IMAGECLI_MAX_RAM_GB", "8.0"))
+if _max_ram_gb > 0:
+    import resource as _resource
+
+    _new_limit = int(_max_ram_gb * 1024**3)
+    _soft, _hard = _resource.getrlimit(_resource.RLIMIT_AS)
+    # Only tighten — never exceed the hard limit set by the OS.
+    _cap = _new_limit if _hard == _resource.RLIM_INFINITY else min(_new_limit, _hard)
+    _resource.setrlimit(_resource.RLIMIT_AS, (_cap, _hard))
 
 # Process-global flag — set_float32_matmul_precision only needs to be called once.
 _tf32_set = False
@@ -126,11 +140,19 @@ class ImageEngine(ABC):
         return output_path
 
     def _finalize_load(self, pipe: object) -> None:
-        """Common post-load setup: CPU offload, VRAM cap, optimizations."""
+        """Move pipeline to GPU and apply optimizations. Raises if VRAM is insufficient."""
         import torch
 
-        pipe.enable_model_cpu_offload(gpu_id=0)
-        torch.cuda.set_per_process_memory_fraction(0.85)
+        if torch.cuda.is_available():
+            free_vram_gb = torch.cuda.mem_get_info(0)[0] / 1024**3
+            if free_vram_gb < self.vram_gb:
+                raise InsufficientResourcesError(
+                    f"Engine {self.name!r} needs ~{self.vram_gb:.1f} GB VRAM, "
+                    f"but only {free_vram_gb:.1f} GB is free. "
+                    f"Close other GPU processes and retry."
+                )
+            pipe.to("cuda")
+            torch.cuda.set_per_process_memory_fraction(0.85)
         self._optimize_pipe(pipe)
 
     def _optimize_pipe(self, pipe: object) -> None:
