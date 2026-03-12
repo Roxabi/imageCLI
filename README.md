@@ -75,6 +75,42 @@ imagecli engines
 imagecli info
 ```
 
+## Library API
+
+imageCLI is also a Python library. Install it as a dependency and call it directly — no subprocess, no HTTP server.
+
+```bash
+# From another project
+uv add --editable /path/to/imageCLI
+```
+
+```python
+from pathlib import Path
+from imagecli import generate, list_engines, preflight_check
+
+# Generate an image — returns the path to the saved file
+out: Path = generate(
+    "a serene mountain landscape at sunset",
+    engine="flux2-klein",       # optional, defaults to imagecli.toml
+    width=1280,
+    height=720,
+    seed=42,                    # reproducible output
+    output_dir="images/out/",
+)
+print(out)   # Path("images/out/image_20260312_143201.png")
+
+# List available engines
+for engine in list_engines():
+    print(engine)   # "flux2-klein", "flux1-dev", …
+
+# Check GPU / resource availability before loading a model
+from imagecli import get_engine
+eng = get_engine("flux2-klein")
+preflight_check(eng)   # raises InsufficientResourcesError if VRAM too low
+```
+
+Public API (`__all__`): `generate`, `get_engine`, `list_engines`, `preflight_check`, `load_config`, `parse_prompt_file`, `ImageEngine`, `InsufficientResourcesError`, `PromptDoc`.
+
 ## Engines
 
 | Engine | Model | VRAM | Steps | Speed | Notes |
