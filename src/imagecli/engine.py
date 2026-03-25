@@ -150,7 +150,6 @@ class ImageEngine(ABC):
                     f"Close other GPU processes and retry."
                 )
             pipe.to("cuda")
-            torch.cuda.set_per_process_memory_fraction(0.85)
         self._optimize_pipe(pipe)
 
     def _optimize_pipe(self, pipe: object) -> None:
