@@ -56,6 +56,8 @@ def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
     # All 3 calls must pass the same cached engine_instance
     for call in mock_run.call_args_list:
         assert call.kwargs["engine_instance"] is mock_engine
+    # clear_cache called between each successful generation
+    assert mock_engine.clear_cache.call_count == 3
 
 
 @patch("imagecli.cli._run_generate")
@@ -148,8 +150,10 @@ def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path)
     assert result.exit_code == 0
     assert "0 succeeded" in result.output
     assert "2 failed" in result.output
-    # Cleanup must still be called even when all generations fail
-    mock_engine.cleanup.assert_called_once()
+    # Cleanup is called on each failure to recover VRAM/RAM.
+    # First failure triggers cleanup; engine is re-created for second file,
+    # second failure triggers cleanup again. No final cleanup needed (already None).
+    assert mock_engine.cleanup.call_count == 2
 
 
 @patch("imagecli.cli._run_generate")

@@ -17,18 +17,16 @@ logger = logging.getLogger(__name__)
 
 MIN_FREE_RAM_GB = float(os.environ.get("IMAGECLI_MIN_FREE_RAM_GB", "4.0"))
 
-# Hard cap on this process's virtual address space.
-# When VRAM is sufficient the model stays on GPU and RAM usage is low (~2-4 GB).
-# If CPU offload is triggered (VRAM too small), RAM can balloon to 70+ GB and OOM-kill WSL.
-# Default: 8 GB — enough for GPU-only mode, kills runaway CPU offload early.
-# Set IMAGECLI_MAX_RAM_GB=0 to disable, or raise it if you intentionally use CPU offload.
-_max_ram_gb = float(os.environ.get("IMAGECLI_MAX_RAM_GB", "8.0"))
+# Virtual address space cap — disabled by default.
+# Models like FLUX.1 need ~24 GB virtual address space during quantization
+# (bf16 weights in RAM before they're quantized and moved to GPU).
+# Set IMAGECLI_MAX_RAM_GB to a positive value to re-enable.
+_max_ram_gb = float(os.environ.get("IMAGECLI_MAX_RAM_GB", "0"))
 if _max_ram_gb > 0:
     import resource as _resource
 
     _new_limit = int(_max_ram_gb * 1024**3)
     _soft, _hard = _resource.getrlimit(_resource.RLIMIT_AS)
-    # Only tighten — never exceed the hard limit set by the OS.
     _cap = _new_limit if _hard == _resource.RLIM_INFINITY else min(_new_limit, _hard)
     _resource.setrlimit(_resource.RLIMIT_AS, (_cap, _hard))
 
@@ -217,10 +215,22 @@ class ImageEngine(ABC):
             )
             return "bf16"
 
-    def cleanup(self) -> None:
-        """Free VRAM / RAM after generation."""
+    def clear_cache(self) -> None:
+        """Clear CUDA cache between generations without unloading the model."""
         import torch
 
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    def cleanup(self) -> None:
+        """Fully unload model and free all VRAM / RAM."""
+        import torch
+
+        if self._pipe is not None:
+            del self._pipe
+            self._pipe = None
+            self._compiled = False
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
@@ -249,17 +259,21 @@ def preflight_check(engine: ImageEngine) -> None:
         )
 
     # --- System RAM check ---
+    # GGUF engines (e.g. flux1-dev) load model weights into system RAM via
+    # enable_model_cpu_offload(). Require at least engine.vram_gb of free RAM
+    # as a proxy for model size, with MIN_FREE_RAM_GB as the absolute floor.
+    ram_needed_gb = max(MIN_FREE_RAM_GB, engine.vram_gb)
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemAvailable:"):
                     available_kb = int(line.split()[1])
                     available_gb = available_kb / 1024 / 1024
-                    if available_gb < MIN_FREE_RAM_GB:
+                    if available_gb < ram_needed_gb:
                         raise InsufficientResourcesError(
                             f"Only {available_gb:.1f} GB system RAM available, "
-                            f"need at least {MIN_FREE_RAM_GB:.1f} GB. "
-                            f"Close other applications and retry."
+                            f"need at least {ram_needed_gb:.1f} GB for engine "
+                            f"{engine.name!r}. Close other applications and retry."
                         )
                     break
     except FileNotFoundError:

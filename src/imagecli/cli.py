@@ -230,11 +230,13 @@ def batch(
 
     console.print(f"Batch: {len(files)} prompt(s) found in {directory}")
 
-    from imagecli.engine import get_engine
+    from imagecli.engine import ImageEngine, get_engine
     from imagecli.markdown import parse_prompt_file
 
-    # Cache engine instances so we don't reload the model for every file.
-    engine_cache: dict[str, object] = {}
+    # Track the currently loaded engine so we can reuse it when consecutive
+    # prompts share the same engine, and fully unload when they don't.
+    current_engine: ImageEngine | None = None
+    current_engine_name: str | None = None
 
     n_files = len(files)
     successes, failures = 0, 0
@@ -243,8 +245,21 @@ def batch(
         try:
             doc = parse_prompt_file(f)
             engine_name = engine or doc.engine or cfg["engine"]
-            if engine_name not in engine_cache:
-                engine_cache[engine_name] = get_engine(engine_name, compile=not no_compile)
+
+            # If the engine changed, fully unload the previous one first.
+            if current_engine is not None and engine_name != current_engine_name:
+                console.print(
+                    f"[dim]Engine changed ({current_engine_name} → {engine_name}), "
+                    f"unloading previous…[/dim]"
+                )
+                current_engine.cleanup()
+                current_engine = None
+                current_engine_name = None
+
+            if current_engine is None:
+                current_engine = get_engine(engine_name, compile=not no_compile)
+                current_engine_name = engine_name
+
             w = doc.width or cfg["width"]
             h = doc.height or cfg["height"]
             s = doc.steps or cfg["steps"]
@@ -265,19 +280,28 @@ def batch(
                 doc.seed,
                 fmt,
                 out_path,
-                engine_instance=engine_cache[engine_name],
+                engine_instance=current_engine,
                 negative_explicit=negative_explicit,
                 steps_explicit=steps_explicit,
                 guidance_explicit=guidance_explicit,
             )
             successes += 1
+
+            # Clear CUDA cache between images to prevent VRAM fragmentation.
+            current_engine.clear_cache()
+
         except Exception as e:
             console.print(f"[red]FAILED:[/red] {e}")
             failures += 1
+            # On failure, fully unload to recover VRAM/RAM for the next image.
+            if current_engine is not None:
+                current_engine.cleanup()
+                current_engine = None
+                current_engine_name = None
 
-    # Cleanup all engines after entire batch completes
-    for eng in engine_cache.values():
-        eng.cleanup()
+    # Final cleanup
+    if current_engine is not None:
+        current_engine.cleanup()
 
     console.rule()
     console.print(f"Done: [green]{successes} succeeded[/green], [red]{failures} failed[/red]")
