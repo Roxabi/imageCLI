@@ -1,17 +1,23 @@
-"""FLUX.1-schnell engine — Apache 2.0, ungated, fast 4-step generation at ~10GB VRAM."""
+"""FLUX.1-schnell engine — GGUF Q5_K_S, Apache 2.0, fast 4-step generation at ~10GB VRAM."""
 
 from __future__ import annotations
 
 import logging
 
-from imagecli.engine import EngineCapabilities, ImageEngine, get_compute_capability
+from imagecli.engine import EngineCapabilities, ImageEngine
 
 logger = logging.getLogger(__name__)
+
+GGUF_REPO = "city96/FLUX.1-schnell-gguf"
+GGUF_FILE = "flux1-schnell-Q5_K_S.gguf"
 
 
 class Flux1SchnellEngine(ImageEngine):
     name = "flux1-schnell"
-    description = "FLUX.1-schnell quantized — Apache 2.0, fast 4-step generation, ~10GB VRAM (Black Forest Labs)"
+    description = (
+        "FLUX.1-schnell GGUF Q5_K_S — Apache 2.0, fast 4-step generation, "
+        "~10GB VRAM (Black Forest Labs)"
+    )
     model_id = "black-forest-labs/FLUX.1-schnell"
     vram_gb = 10.0
     # steps are NOT fixed (user can override the 4-step default)
@@ -21,18 +27,24 @@ class Flux1SchnellEngine(ImageEngine):
         if self._pipe is not None:
             return
         import torch
-        from diffusers import FluxPipeline
+        from diffusers import FluxPipeline, FluxTransformer2DModel, GGUFQuantizationConfig
 
-        sm = get_compute_capability()
-        qtype_label = "fp8" if sm >= (8, 9) else "int8"
-        logger.info("Loading %s (%s)...", self.model_id, qtype_label)
-        self._pipe = FluxPipeline.from_pretrained(
-            self.model_id,
+        logger.info("Loading %s (GGUF %s)...", self.model_id, GGUF_FILE)
+        transformer = FluxTransformer2DModel.from_single_file(
+            f"https://huggingface.co/{GGUF_REPO}/blob/main/{GGUF_FILE}",
+            quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
             torch_dtype=torch.bfloat16,
         )
-        actual_qtype = self._quantize_transformer(self._pipe, sm)
-        logger.info("Transformer quantized to %s.", actual_qtype)
-        self._finalize_load(self._pipe)
+        self._pipe = FluxPipeline.from_pretrained(
+            self.model_id,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        # Sequential offload: only the active component lives on GPU at any
+        # given time. The GGUF transformer is ~8 GB, but T5 (5B bf16) + CLIP +
+        # VAE together exceed 16 GB if loaded simultaneously.
+        self._pipe.enable_model_cpu_offload()
+        self._optimize_pipe(self._pipe)
         logger.info("Model ready.")
 
     def _build_pipe_kwargs(
