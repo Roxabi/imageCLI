@@ -325,10 +325,12 @@ def _get_registry() -> dict[str, type[ImageEngine]]:
     from imagecli.engines.flux1_dev import Flux1DevEngine
     from imagecli.engines.flux1_schnell import Flux1SchnellEngine
     from imagecli.engines.flux2_klein import Flux2KleinEngine
+    from imagecli.engines.pulid_flux2_klein import PuLIDFlux2KleinEngine
     from imagecli.engines.sd35 import SD35Engine
 
     return {
         "flux2-klein": Flux2KleinEngine,
+        "pulid-flux2-klein": PuLIDFlux2KleinEngine,
         "flux1-dev": Flux1DevEngine,
         "flux1-schnell": Flux1SchnellEngine,
         "sd35": SD35Engine,

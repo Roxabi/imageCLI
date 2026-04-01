@@ -68,6 +68,7 @@ Defined in `src/imagecli/engine.py`.
 ```python
 {
     "flux2-klein": Flux2KleinEngine,
+    "pulid-flux2-klein": PuLIDFlux2KleinEngine,
     "flux1-dev": Flux1DevEngine,
     "flux1-schnell": Flux1SchnellEngine,
     "sd35": SD35Engine,
@@ -110,6 +111,7 @@ Wrap quantization in try/except and fall back to bf16 with a warning.
 | Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
 |---|---|---|
 | `flux2-klein` | ✓ bf16 | ✗ too large (~13GB) |
+| `pulid-flux2-klein` | ✓ bf16 + cpu_offload | ✗ too large |
 | `flux1-dev` | ✓ fp8 | ✓ int8 |
 | `flux1-schnell` | ✓ fp8 | ✓ int8 |
 | `sd35` | ✓ int8 T5 | ✗ too large (~14GB) |

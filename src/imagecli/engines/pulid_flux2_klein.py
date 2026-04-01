@@ -1,0 +1,360 @@
+"""FLUX.2-klein-4B + PuLID face identity lock engine.
+
+Ported from iFayens/ComfyUI-PuLID-Flux2 — ComfyUI dependencies stripped,
+runs directly in the imagecli diffusers pipeline.
+
+Face reference image path must be supplied via ``face_image`` in frontmatter.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from imagecli.engine import EngineCapabilities, ImageEngine
+
+logger = logging.getLogger(__name__)
+
+_PULID_DIR = Path.home() / "ComfyUI/models/pulid"
+_INSIGHTFACE_DIR = Path.home() / "ComfyUI/models/insightface"
+_PULID_DEFAULT = _PULID_DIR / "pulid_flux2_klein_v2.safetensors"
+
+
+# ── PuLID nn.Module classes ────────────────────────────────────────────────────
+
+
+class _PerceiverAttentionCA(nn.Module):
+    def __init__(self, dim: int = 4096, dim_head: int = 64, heads: int = 16):
+        super().__init__()
+        self.heads = heads
+        self.dim_head = dim_head
+        inner_dim = dim_head * heads
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+
+    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        B, N, _ = x.shape
+        dtype = self.norm1.weight.dtype
+        x, context = x.to(dtype), context.to(dtype)
+        x_n, ctx = self.norm1(x), self.norm2(context)
+        q = self.to_q(x_n)
+        k, v = self.to_kv(ctx).chunk(2, dim=-1)
+
+        def reshape(t: torch.Tensor) -> torch.Tensor:
+            return t.view(B, -1, self.heads, self.dim_head).transpose(1, 2)
+
+        out = F.scaled_dot_product_attention(reshape(q), reshape(k), reshape(v))
+        return self.to_out(out.transpose(1, 2).contiguous().view(B, N, -1))
+
+
+class _IDFormer(nn.Module):
+    def __init__(self, dim: int = 4096, num_tokens: int = 4):
+        super().__init__()
+        self.num_tokens = num_tokens
+        self.proj = nn.Sequential(
+            nn.Linear(512 + 768, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim * num_tokens),
+        )
+        self.latents = nn.Parameter(torch.randn(1, num_tokens, dim) * 0.02)
+        self.layers = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(4)])
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, id_embed: torch.Tensor, clip_embed: torch.Tensor) -> torch.Tensor:
+        B = id_embed.shape[0]
+        clip_embed = clip_embed - clip_embed.mean(dim=-1, keepdim=True)
+        combined = torch.cat([id_embed, clip_embed], dim=-1)
+        tokens = self.proj(combined).view(B, self.num_tokens, -1)
+        latents = self.latents.expand(B, -1, -1)
+        for layer in self.layers:
+            latents = latents + layer(latents, tokens)
+        return self.norm(latents)
+
+
+class _PuLIDFlux2(nn.Module):
+    def __init__(self, dim: int = 4096):
+        super().__init__()
+        self.dim = dim
+        self.id_former = _IDFormer(dim=dim)
+        self.double_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(12)])
+        self.single_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(60)])
+
+    @classmethod
+    def from_safetensors(cls, path: Path) -> "_PuLIDFlux2":
+        from safetensors.torch import load_file
+
+        state = load_file(str(path), device="cpu")
+        dim = state["id_former.latents"].shape[-1]
+        model = cls(dim=dim)
+        model.load_state_dict(state, strict=False)
+        return model
+
+
+# ── transformer patching ───────────────────────────────────────────────────────
+
+
+def _get_flux_inner(model: object) -> object:
+    """Unwrap ComfyUI model wrappers; diffusers transformers pass straight through."""
+    if hasattr(model, "model"):
+        model = model.model  # type: ignore[union-attr]
+    if hasattr(model, "diffusion_model"):
+        model = model.diffusion_model  # type: ignore[union-attr]
+    return model
+
+
+def _detect_variant(transformer: object) -> tuple[str, int, int, int]:
+    """Return (variant_name, hidden_dim, n_double, n_single) for Klein 4B / 9B."""
+    dm = _get_flux_inner(transformer)
+    double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
+    single_blocks = (
+        getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
+    )
+    n_d, n_s = len(double_blocks), len(single_blocks)
+    if n_d <= 6 and n_s <= 22:
+        return "klein_4b", 3072, n_d, n_s
+    return "klein_9b", 4096, n_d, n_s
+
+
+def _ca_index(block_idx: int, total: int, num_ca: int) -> int:
+    return block_idx if total <= num_ca else int(block_idx * num_ca / total)
+
+
+def _scale(block_idx: int, total: int, block_type: str) -> float:
+    p = block_idx / max(total, 1)
+    if block_type == "double":
+        return 8.0 if p < 0.4 else 5.0 if p < 0.7 else 3.0
+    return 6.5 if p < 0.3 else 4.5 if p < 0.6 else 3.0 if p < 0.85 else 1.8
+
+
+def _patch_flux(
+    transformer: object,
+    pulid: _PuLIDFlux2,
+    id_tokens: torch.Tensor,
+    strength: float,
+) -> object:
+    """Monkey-patch transformer blocks to inject PuLID identity. Returns unpatch callable."""
+    dm = _get_flux_inner(transformer)
+    double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
+    single_blocks = (
+        getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
+    )
+    n_d, n_s = len(double_blocks), len(single_blocks)
+
+    orig_d: dict[int, object] = {}
+    orig_s: dict[int, object] = {}
+
+    for idx, block in enumerate(double_blocks):
+        orig_d[idx] = block.forward
+
+        def make_double(i: int):
+            # Flux2TransformerBlock uses temb_mod_img / temb_mod_txt (not temb)
+            def patched(hidden_states=None, encoder_hidden_states=None,
+                        temb_mod_img=None, temb_mod_txt=None, **kwargs):
+                out_hs, out_enc = orig_d[i](
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    temb_mod_img=temb_mod_img,
+                    temb_mod_txt=temb_mod_txt,
+                    **kwargs,
+                )
+                ca = pulid.double_ca[_ca_index(i, n_d, len(pulid.double_ca))]
+                correction = F.normalize(ca(out_hs, id_tokens), p=2, dim=-1)
+                return out_hs + strength * _scale(i, n_d, "double") * correction, out_enc
+
+            return patched
+
+        block.forward = make_double(idx)
+
+    for idx, block in enumerate(single_blocks):
+        orig_s[idx] = block.forward
+
+        def make_single(i: int):
+            # Flux2SingleTransformerBlock uses temb_mod and returns (hidden_states, encoder_hidden_states)
+            def patched(hidden_states=None, encoder_hidden_states=None, temb_mod=None, **kwargs):
+                out_hs, out_enc = orig_s[i](
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    temb_mod=temb_mod,
+                    **kwargs,
+                )
+                ca = pulid.single_ca[_ca_index(i, n_s, len(pulid.single_ca))]
+                correction = F.normalize(ca(out_hs, id_tokens), p=2, dim=-1)
+                return out_hs + strength * _scale(i, n_s, "single") * correction, out_enc
+
+            return patched
+
+        block.forward = make_single(idx)
+
+    def unpatch() -> None:
+        for i, block in enumerate(double_blocks):
+            if i in orig_d:
+                block.forward = orig_d[i]
+        for i, block in enumerate(single_blocks):
+            if i in orig_s:
+                block.forward = orig_s[i]
+
+    return unpatch
+
+
+# ── engine ─────────────────────────────────────────────────────────────────────
+
+
+class PuLIDFlux2KleinEngine(ImageEngine):
+    name = "pulid-flux2-klein"
+    description = "FLUX.2-klein-4B + PuLID face lock — requires face_image in frontmatter"
+    model_id = "black-forest-labs/FLUX.2-klein-4B"
+    vram_gb = 8.0  # with cpu_offload, peak during transformer forward ~9-10 GB
+    capabilities = EngineCapabilities(negative_prompt=False)
+
+    def __init__(self, *, compile: bool = True) -> None:
+        # torch.compile captures original forward methods — incompatible with per-generation patching
+        super().__init__(compile=False)
+        self._pulid: _PuLIDFlux2 | None = None
+        self._insightface: object | None = None
+        self._eva_clip: object | None = None
+
+    def _finalize_load(self, pipe: object) -> None:
+        """Use CPU offloading instead of full VRAM load — keeps peak ~9-10 GB."""
+        import torch
+
+        if torch.cuda.is_available():
+            free_vram_gb = torch.cuda.mem_get_info(0)[0] / 1024**3
+            if free_vram_gb < self.vram_gb:
+                from imagecli.engine import InsufficientResourcesError
+                raise InsufficientResourcesError(
+                    f"Engine {self.name!r} needs ~{self.vram_gb:.1f} GB VRAM free, "
+                    f"but only {free_vram_gb:.1f} GB is available."
+                )
+            pipe.enable_model_cpu_offload()  # type: ignore[union-attr]
+        self._optimize_pipe(pipe)
+
+    def _load(self) -> None:
+        if self._pipe is not None:
+            return
+
+        import os
+        os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
+        from diffusers import Flux2KleinPipeline
+
+        logger.info("Loading Flux2Klein for PuLID (cpu_offload)…")
+        self._pipe = Flux2KleinPipeline.from_pretrained(
+            self.model_id,
+            torch_dtype=torch.bfloat16,
+        )
+        self._finalize_load(self._pipe)
+
+        logger.info("Loading PuLID model from %s…", _PULID_DEFAULT)
+        self._pulid = _PuLIDFlux2.from_safetensors(_PULID_DEFAULT)
+        self._pulid.eval().to("cuda", dtype=torch.bfloat16)
+
+        logger.info("Loading InsightFace (AntelopeV2)…")
+        from insightface.app import FaceAnalysis  # type: ignore[import-untyped]
+
+        self._insightface = FaceAnalysis(
+            name="antelopev2",
+            root=str(_INSIGHTFACE_DIR),
+            providers=["CUDAExecutionProvider"],
+        )
+        self._insightface.prepare(ctx_id=0, det_size=(640, 640))  # type: ignore[union-attr]
+
+        logger.info("Loading EVA-CLIP…")
+        import open_clip  # type: ignore[import-untyped]
+
+        clip_model, _, _ = open_clip.create_model_and_transforms(
+            "EVA02-L-14-336",
+            pretrained="merged2b_s6b_b61k",
+        )
+        self._eva_clip = clip_model.visual.eval().to("cuda")
+        logger.info("PuLID engine ready.")
+
+    def _extract_id_tokens(self, face_image_path: str) -> torch.Tensor:
+        from PIL import Image
+
+        device = torch.device("cuda")
+        dtype = torch.bfloat16
+
+        img = np.array(Image.open(face_image_path).convert("RGB"))
+        faces = self._insightface.get(img)  # type: ignore[union-attr]
+        if not faces:
+            raise RuntimeError(f"No face detected in reference image: {face_image_path}")
+
+        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+        id_embed = torch.from_numpy(face.embedding).unsqueeze(0).to(device, dtype=dtype)
+        id_embed = F.normalize(id_embed, dim=-1)
+
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        margin = int(max(x2 - x1, y2 - y1) * 0.2)
+        x1, y1 = max(0, x1 - margin), max(0, y1 - margin)
+        x2, y2 = min(img.shape[1], x2 + margin), min(img.shape[0], y2 + margin)
+
+        face_t = (
+            torch.from_numpy(img[y1:y2, x1:x2].astype(np.float32) / 255.0)
+            .permute(2, 0, 1)
+            .unsqueeze(0)
+            .to(device)
+        )
+        face_t = F.interpolate(face_t, size=(336, 336), mode="bilinear", align_corners=False)
+        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
+        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
+        face_t = (face_t - mean) / std
+
+        with torch.no_grad():
+            clip_out = self._eva_clip(face_t.float())  # type: ignore[union-attr]
+            if isinstance(clip_out, (list, tuple)):
+                clip_out = clip_out[0]
+            if clip_out.dim() == 3:
+                clip_out = clip_out[:, 0, :]
+            clip_embed = clip_out.to(device, dtype=dtype)
+
+            id_tokens = self._pulid.id_former(id_embed, clip_embed)  # type: ignore[union-attr]
+            id_tokens = F.normalize(id_tokens, p=2, dim=-1)
+
+        return id_tokens
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        face_image: str | None = None,
+        pulid_strength: float = 0.6,
+        output_path: Path,
+        **kwargs,
+    ) -> Path:
+        if not face_image:
+            raise ValueError(
+                "pulid-flux2-klein requires 'face_image' in the prompt frontmatter.\n"
+                "Example: face_image: /path/to/reference.png"
+            )
+
+        self._load()
+        id_tokens = self._extract_id_tokens(face_image)
+
+        # EVA-CLIP and InsightFace are done — move EVA-CLIP to CPU to free ~1 GB before inference
+        if self._eva_clip is not None:
+            self._eva_clip.to("cpu")
+        torch.cuda.empty_cache()
+
+        unpatch = _patch_flux(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)
+        try:
+            return super().generate(prompt, output_path=output_path, **kwargs)
+        finally:
+            unpatch()
+            # restore EVA-CLIP to GPU for next generation
+            if self._eva_clip is not None:
+                self._eva_clip.to("cuda")
+
+    def cleanup(self) -> None:
+        self._pulid = None
+        self._insightface = None
+        self._eva_clip = None
+        super().cleanup()

@@ -7,6 +7,12 @@
 
 Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, FLUX.1-schnell, and SD3.5 Large Turbo backends via HuggingFace Diffusers.
 
+## Why
+
+Running image generation locally means no API costs, no rate limits, and full control over prompts and outputs. But wiring up HuggingFace Diffusers — quantization, VRAM management, preflight checks — is repetitive boilerplate.
+
+imageCLI wraps all of that into a single command. Point it at a text prompt or a `.md` file and get an image. Swap backends with `-e`. Batch an entire directory. Import it as a Python library.
+
 ## Requirements
 
 - Python 3.11–3.12
@@ -75,6 +81,22 @@ imagecli engines
 imagecli info
 ```
 
+## How it works
+
+A prompt (text or `.md` file) is dispatched to an engine. The engine lazy-loads its model on the first call, runs preflight VRAM/RAM checks, generates the image, and saves it — then frees GPU memory.
+
+```mermaid
+flowchart LR
+  A["prompt / .md file"] --> B["engine registry"]
+  B --> C["preflight_check\nVRAM + RAM"]
+  C --> D["_load()\nlazy model load"]
+  D --> E["inference\ntorch.inference_mode()"]
+  E --> F["image.save()"]
+  F --> G["cleanup()\nVRAM freed"]
+```
+
+Engines stay alive across batch runs — the model loads once per session. `torch.compile` fuses CUDA kernels on the first generation, then runs at full speed for all subsequent images.
+
 ## Library API
 
 imageCLI is also a Python library. Install it as a dependency and call it directly — no subprocess, no HTTP server.
@@ -116,6 +138,7 @@ Public API (`__all__`): `generate`, `get_engine`, `list_engines`, `preflight_che
 | Engine | Model | VRAM | Steps | Speed | Notes |
 |---|---|---|---|---|---|
 | `flux2-klein` | FLUX.2-klein-4B | ~13GB | 50 | ~20s | **Default.** Best quality/VRAM ratio. BFL Nov 2025 |
+| `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | 50 | ~25s | Face identity lock. Requires `face_image` in frontmatter. `uv sync --extra pulid` |
 | `flux1-dev` | FLUX.1-dev fp8 | ~10GB | 50 | ~30s | Maximum quality, longer prompts. fp8 via optimum-quanto |
 | `flux1-schnell` | FLUX.1-schnell fp8 | ~10GB | 4 | ~5s | Fastest. Apache 2.0, ungated. fp8 via optimum-quanto |
 | `sd35` | SD3.5 Large Turbo | ~14GB | 20 | ~8s | CFG-free, realistic photos. T5 encoder quantized to int8 |
@@ -142,7 +165,7 @@ imagecli generate "prompt" --no-compile              # skip torch.compile for on
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--engine` | `-e` | Engine name (`flux2-klein`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
+| `--engine` | `-e` | Engine name (`flux2-klein`, `pulid-flux2-klein`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
 | `--width` | `-W` | Output width in pixels (multiple of 64) | `1024` |
 | `--height` | `-H` | Output height in pixels (multiple of 64) | `1024` |
 | `--steps` | `-s` | Inference steps | `50` |
@@ -193,7 +216,7 @@ Write prompts as `.md` files with YAML frontmatter. Store them in `images/prompt
 
 ```markdown
 ---
-engine: flux2-klein          # flux2-klein | flux1-dev | flux1-schnell | sd35
+engine: flux2-klein          # flux2-klein | pulid-flux2-klein | flux1-dev | flux1-schnell | sd35
 width: 1024                  # pixels, must be a multiple of 64
 height: 1024
 steps: 50                    # inference steps (sd35 is fixed at 20)
@@ -201,6 +224,8 @@ guidance: 4.0                # CFG scale (sd35 is fixed at 1.0, flux1-schnell at
 seed: 42                     # optional — omit for a random result
 negative_prompt: "blurry, low quality, watermark"
 format: png                  # png | jpg | webp
+face_image: /path/to/ref.png # pulid-flux2-klein only — reference face (abs or relative to .md)
+pulid_strength: 0.6          # pulid-flux2-klein only — identity lock strength (default 0.6)
 ---
 
 Your prompt text here. Can span multiple paragraphs.
@@ -290,12 +315,17 @@ src/imagecli/
   markdown.py             — YAML frontmatter parser for .md prompt files
   engines/
     flux2_klein.py        — FLUX.2-klein-4B engine (default)
+    pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
     flux1_dev.py          — FLUX.1-dev fp8 quantized engine
     flux1_schnell.py      — FLUX.1-schnell fp8 quantized engine
     sd35.py               — SD3.5 Large Turbo engine
 ```
 
 Output files never overwrite existing ones. If `image.png` already exists, the next run saves `image_1.png`, then `image_2.png`, and so on.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, code conventions, and how to add a new engine. All PRs target `staging` and require `ruff` + `pytest` to pass.
 
 ## Documentation
 

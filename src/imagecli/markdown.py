@@ -27,6 +27,8 @@ class PromptDoc:
     guidance: float | None = None
     seed: int | None = None
     format: str | None = None
+    face_image: str | None = None
+    pulid_strength: float = 0.6
     extra: dict = field(default_factory=dict)
 
 
@@ -62,6 +64,8 @@ def parse_prompt_file(path: Path) -> PromptDoc:
         guidance=_float(frontmatter.pop("guidance", None)),
         seed=_int(frontmatter.pop("seed", None)),
         format=frontmatter.pop("format", None),
+        face_image=frontmatter.pop("face_image", None),
+        pulid_strength=_float(frontmatter.pop("pulid_strength", None)) or 0.6,
         extra=frontmatter,
     )
 

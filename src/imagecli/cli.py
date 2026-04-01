@@ -21,6 +21,14 @@ from rich.table import Table
 
 from imagecli._utils import resolve_output as _resolve_output
 
+
+def _resolve_face_image(face_image: str | None, prompt_dir: Path) -> str | None:
+    """Resolve face_image path: absolute → as-is, relative → relative to prompt file dir."""
+    if not face_image:
+        return None
+    p = Path(face_image)
+    return str(p if p.is_absolute() else (prompt_dir / p).resolve())
+
 app = typer.Typer(
     name="imagecli",
     help="Local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends.",
@@ -60,6 +68,8 @@ def _run_generate(
     negative_explicit: bool = False,
     steps_explicit: bool = False,
     guidance_explicit: bool = False,
+    face_image: str | None = None,
+    pulid_strength: float = 0.6,
 ):
     from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
@@ -110,6 +120,8 @@ def _run_generate(
                 seed=seed,
                 output_path=output_path,
                 callback=_step_callback,
+                face_image=face_image,
+                pulid_strength=pulid_strength,
             )
     finally:
         if engine_instance is None:
@@ -171,6 +183,8 @@ def generate(
         negative_explicit = bool(negative) or bool(doc.negative_prompt)
         steps_explicit = steps is not None or doc.steps is not None
         guidance_explicit = guidance is not None or doc.guidance is not None
+        face_img = _resolve_face_image(doc.face_image, path.parent)
+        pulid_str = doc.pulid_strength
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -185,6 +199,8 @@ def generate(
         negative_explicit = bool(negative)
         steps_explicit = steps is not None
         guidance_explicit = guidance is not None
+        face_img = None
+        pulid_str = 0.6
 
     if output:
         out_path = Path(output)
@@ -207,6 +223,8 @@ def generate(
         negative_explicit=negative_explicit,
         steps_explicit=steps_explicit,
         guidance_explicit=guidance_explicit,
+        face_image=face_img,
+        pulid_strength=pulid_str,
     )
 
 
@@ -284,6 +302,8 @@ def batch(
                 negative_explicit=negative_explicit,
                 steps_explicit=steps_explicit,
                 guidance_explicit=guidance_explicit,
+                face_image=_resolve_face_image(doc.face_image, f.parent),
+                pulid_strength=doc.pulid_strength,
             )
             successes += 1
 

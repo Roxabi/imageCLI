@@ -9,10 +9,11 @@ src/imagecli/
   engine.py         — ImageEngine base class, registry (_get_registry), preflight checks
   markdown.py       — YAML frontmatter parser for .md prompt files
   engines/
-    flux2_klein.py  — FLUX.2-klein-4B (default)
-    flux1_dev.py    — FLUX.1-dev fp8 quantized
-    flux1_schnell.py — FLUX.1-schnell
-    sd35.py         — SD3.5 Large Turbo
+    flux2_klein.py        — FLUX.2-klein-4B (default)
+    pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face lock (optional extra)
+    flux1_dev.py          — FLUX.1-dev fp8 quantized
+    flux1_schnell.py      — FLUX.1-schnell
+    sd35.py               — SD3.5 Large Turbo
 images/
   prompts_in/       — .md prompt files (tracked in git)
   images_out/       — generated images (gitignored)
@@ -93,11 +94,37 @@ uv run pytest
 All three must pass with no errors. Tests live in `tests/` and must not require a GPU —
 mock `torch` and `diffusers` for unit tests.
 
+## Commit Format
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <short description>
+```
+
+Common types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`  
+Common scopes: `cli`, `engine`, `markdown`, `config`, `engines/<name>`
+
+Examples:
+
+```
+feat(engine): add SDXL backend
+fix(engine): prevent OOM when VRAM < vram_gb threshold
+docs(readme): add How it works diagram
+chore: bump diffusers to 0.32.0
+```
+
 ## Pull Requests
 
-- Target the `main` branch.
-- Use Conventional Commits for the PR title: `feat(engine): add SDXL backend`.
-  Common scopes: `cli`, `engine`, `markdown`, `config`.
+- Target the `staging` branch.
+- Use Conventional Commits for the PR title (see above).
 - Keep one logical change per PR. Link the related issue with `Closes #N`.
 - Include a short description of what changed and why.
 - All quality gates must pass before requesting review.
+
+## Code Review
+
+- Reviews focus on correctness, memory safety, and convention adherence — not style (ruff handles that).
+- Expect at most one round of feedback for small PRs; larger changes may need more discussion.
+- Reviewer may ask for a test if a bug fix has no coverage.
+- All `ruff` and `pytest` failures must be resolved before merge.

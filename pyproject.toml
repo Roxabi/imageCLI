@@ -47,8 +47,8 @@ diffusers = { git = "https://github.com/huggingface/diffusers.git" }
 override-dependencies = [
     "torch>=2.7",
     "torchvision>=0.20",
-    # numpy compat
-    "numpy>=1.26",
+    # numpy<2 required by insightface (compiled against 1.x ABI)
+    "numpy>=1.26,<2.0",
 ]
 
 [tool.pytest.ini_options]
@@ -60,4 +60,13 @@ dev = [
     "pytest",
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
+]
+pulid = [
+    "insightface>=0.7.3",
+    "onnxruntime-gpu>=1.16.0",
+    "open-clip-torch>=3.2.0",
+    "safetensors>=0.4.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.26,<2.0",
+    "ml_dtypes>=0.4.0",
 ]
