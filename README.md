@@ -5,7 +5,7 @@
 ![CUDA](https://img.shields.io/badge/CUDA-enabled-76B900?logo=nvidia&logoColor=white)
 ![version](https://img.shields.io/badge/version-0.1.0-22c55e)
 
-Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, FLUX.1-schnell, and SD3.5 Large Turbo backends via HuggingFace Diffusers.
+Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev (+ PuLID face lock), FLUX.1-schnell, and SD3.5 Large Turbo backends via HuggingFace Diffusers.
 
 ## Why
 
@@ -137,8 +137,9 @@ Public API (`__all__`): `generate`, `get_engine`, `list_engines`, `preflight_che
 
 | Engine | Model | VRAM | Steps | Speed | Notes |
 |---|---|---|---|---|---|
-| `flux2-klein` | FLUX.2-klein-4B | ~13GB | 50 | ~20s | **Default.** Best quality/VRAM ratio. BFL Nov 2025 |
-| `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | 50 | ~25s | Face identity lock. Requires `face_image` in frontmatter. `uv sync --extra pulid` |
+| `flux2-klein` | FLUX.2-klein-4B | ~8GB | 50 | ~20s | **Default.** FP8 quanto + CPU offload. Best quality/VRAM ratio. BFL Nov 2025 |
+| `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | 50 | ~25s | Face identity lock (Klein). Requires `face_image` in frontmatter. `uv sync --extra pulid` |
+| `pulid-flux1-dev` | FLUX.1-dev + PuLID v0.9.1 | ~10GB | 24 | ~42s | Face identity lock (recommended). GGUF Q5_K_S + PuLID. Clean 1024×1024, no banding. `uv sync --extra pulid` |
 | `flux1-dev` | FLUX.1-dev fp8 | ~10GB | 50 | ~30s | Maximum quality, longer prompts. fp8 via optimum-quanto |
 | `flux1-schnell` | FLUX.1-schnell fp8 | ~10GB | 4 | ~5s | Fastest. Apache 2.0, ungated. fp8 via optimum-quanto |
 | `sd35` | SD3.5 Large Turbo | ~14GB | 20 | ~8s | CFG-free, realistic photos. T5 encoder quantized to int8 |
@@ -165,7 +166,7 @@ imagecli generate "prompt" --no-compile              # skip torch.compile for on
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--engine` | `-e` | Engine name (`flux2-klein`, `pulid-flux2-klein`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
+| `--engine` | `-e` | Engine name (`flux2-klein`, `pulid-flux2-klein`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
 | `--width` | `-W` | Output width in pixels (multiple of 64) | `1024` |
 | `--height` | `-H` | Output height in pixels (multiple of 64) | `1024` |
 | `--steps` | `-s` | Inference steps | `50` |
@@ -216,7 +217,7 @@ Write prompts as `.md` files with YAML frontmatter. Store them in `images/prompt
 
 ```markdown
 ---
-engine: flux2-klein          # flux2-klein | pulid-flux2-klein | flux1-dev | flux1-schnell | sd35
+engine: flux2-klein          # flux2-klein | pulid-flux2-klein | pulid-flux1-dev | flux1-dev | flux1-schnell | sd35
 width: 1024                  # pixels, must be a multiple of 64
 height: 1024
 steps: 50                    # inference steps (sd35 is fixed at 20)
@@ -224,8 +225,8 @@ guidance: 4.0                # CFG scale (sd35 is fixed at 1.0, flux1-schnell at
 seed: 42                     # optional — omit for a random result
 negative_prompt: "blurry, low quality, watermark"
 format: png                  # png | jpg | webp
-face_image: /path/to/ref.png # pulid-flux2-klein only — reference face (abs or relative to .md)
-pulid_strength: 0.6          # pulid-flux2-klein only — identity lock strength (default 0.6)
+face_image: /path/to/ref.png # pulid engines only — reference face (abs or relative to .md)
+pulid_strength: 0.6          # pulid engines only — identity lock strength (default 0.6, 0.8 for flux1-dev)
 ---
 
 Your prompt text here. Can span multiple paragraphs.
@@ -316,6 +317,7 @@ src/imagecli/
   engines/
     flux2_klein.py        — FLUX.2-klein-4B engine (default)
     pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
+    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1 face identity lock
     flux1_dev.py          — FLUX.1-dev fp8 quantized engine
     flux1_schnell.py      — FLUX.1-schnell fp8 quantized engine
     sd35.py               — SD3.5 Large Turbo engine

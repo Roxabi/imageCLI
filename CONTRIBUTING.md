@@ -11,6 +11,7 @@ src/imagecli/
   engines/
     flux2_klein.py        — FLUX.2-klein-4B (default)
     pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face lock (optional extra)
+    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1 face lock
     flux1_dev.py          — FLUX.1-dev fp8 quantized
     flux1_schnell.py      — FLUX.1-schnell
     sd35.py               — SD3.5 Large Turbo

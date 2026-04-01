@@ -4,6 +4,16 @@ Ported from iFayens/ComfyUI-PuLID-Flux2 — ComfyUI dependencies stripped,
 runs directly in the imagecli diffusers pipeline.
 
 Face reference image path must be supplied via ``face_image`` in frontmatter.
+
+Dim mismatch handling (Strategy B — 2026-04-01):
+    PuLID Klein v2 weights have dim=4096 (trained for Klein 9B).
+    Klein 4B has hidden_size=3072. Rather than discard the trained CA weights
+    (as iFayens does — creating random CA at 3072), we keep the trained CA at 4096
+    and project hidden_states around them:
+        hidden_states (3072) → proj_up (4096) → trained CA → proj_down (3072)
+    The projection layers are random-init but the trained CA attention patterns
+    that encode identity are preserved. This is theoretically stronger than
+    the iFayens approach where only the IDFormer survives.
 """
 
 from __future__ import annotations
@@ -80,12 +90,12 @@ class _IDFormer(nn.Module):
 
 
 class _PuLIDFlux2(nn.Module):
-    def __init__(self, dim: int = 4096):
+    def __init__(self, dim: int = 4096, n_double_ca: int = 5, n_single_ca: int = 7):
         super().__init__()
         self.dim = dim
         self.id_former = _IDFormer(dim=dim)
-        self.double_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(12)])
-        self.single_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(60)])
+        self.double_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(n_double_ca)])
+        self.single_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(n_single_ca)])
 
     @classmethod
     def from_safetensors(cls, path: Path) -> "_PuLIDFlux2":
@@ -93,8 +103,36 @@ class _PuLIDFlux2(nn.Module):
 
         state = load_file(str(path), device="cpu")
         dim = state["id_former.latents"].shape[-1]
-        model = cls(dim=dim)
-        model.load_state_dict(state, strict=False)
+
+        # Auto-detect CA module counts from key structure.
+        # Weights use pulid_ca_double.N.* / pulid_ca_single.N.* prefixes.
+        n_double = max(
+            (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_double.")),
+            default=-1,
+        ) + 1
+        n_single = max(
+            (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_single.")),
+            default=-1,
+        ) + 1
+        logger.info(
+            "PuLID weights: dim=%d, %d double CA, %d single CA", dim, n_double, n_single,
+        )
+
+        model = cls(dim=dim, n_double_ca=n_double, n_single_ca=n_single)
+
+        # Remap key prefixes: pulid_ca_double → double_ca, pulid_ca_single → single_ca
+        remapped: dict[str, torch.Tensor] = {}
+        for k, v in state.items():
+            k_new = k.replace("pulid_ca_double.", "double_ca.").replace(
+                "pulid_ca_single.", "single_ca."
+            )
+            remapped[k_new] = v
+
+        missing, unexpected = model.load_state_dict(remapped, strict=False)
+        if missing:
+            logger.warning("PuLID load: missing keys: %s", missing[:5])
+        if unexpected:
+            logger.warning("PuLID load: unexpected keys: %s", unexpected[:5])
         return model
 
 
@@ -134,6 +172,41 @@ def _scale(block_idx: int, total: int, block_type: str) -> float:
     return 6.5 if p < 0.3 else 4.5 if p < 0.6 else 3.0 if p < 0.85 else 1.8
 
 
+def _make_projections(
+    pulid_dim: int,
+    model_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[nn.Linear, nn.Linear] | None:
+    """Create up/down projection pair if dims mismatch. Returns None if no projection needed."""
+    if pulid_dim == model_dim:
+        return None
+    logger.info("Dim mismatch: model=%d, PuLID=%d — creating projection layers", model_dim, pulid_dim)
+    proj_up = nn.Linear(model_dim, pulid_dim, bias=False)
+    proj_down = nn.Linear(pulid_dim, model_dim, bias=False)
+    # Orthogonal init preserves norms better than random normal for pass-through projections
+    nn.init.orthogonal_(proj_up.weight)
+    nn.init.orthogonal_(proj_down.weight)
+    proj_up.to(device, dtype=dtype)
+    proj_down.to(device, dtype=dtype)
+    return proj_up, proj_down
+
+
+def _apply_ca(
+    ca: _PerceiverAttentionCA,
+    hidden_states: torch.Tensor,
+    id_tokens: torch.Tensor,
+    projections: tuple[nn.Linear, nn.Linear] | None,
+) -> torch.Tensor:
+    """Run CA with optional dim projection around trained weights."""
+    if projections is not None:
+        proj_up, proj_down = projections
+        # hidden_states (3072) → proj_up (4096) → trained CA → proj_down (3072)
+        correction = ca(proj_up(hidden_states), id_tokens)
+        return F.normalize(proj_down(correction), p=2, dim=-1)
+    return F.normalize(ca(hidden_states, id_tokens), p=2, dim=-1)
+
+
 def _patch_flux(
     transformer: object,
     pulid: _PuLIDFlux2,
@@ -147,6 +220,13 @@ def _patch_flux(
         getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
     )
     n_d, n_s = len(double_blocks), len(single_blocks)
+
+    # Detect dim mismatch and create projections if needed
+    _, model_dim, _, _ = _detect_variant(transformer)
+    projections = _make_projections(
+        pulid.dim, model_dim,
+        device=id_tokens.device, dtype=id_tokens.dtype,
+    )
 
     orig_d: dict[int, object] = {}
     orig_s: dict[int, object] = {}
@@ -166,7 +246,7 @@ def _patch_flux(
                     **kwargs,
                 )
                 ca = pulid.double_ca[_ca_index(i, n_d, len(pulid.double_ca))]
-                correction = F.normalize(ca(out_hs, id_tokens), p=2, dim=-1)
+                correction = _apply_ca(ca, out_hs, id_tokens, projections)
                 return out_hs + strength * _scale(i, n_d, "double") * correction, out_enc
 
             return patched
@@ -186,7 +266,7 @@ def _patch_flux(
                     **kwargs,
                 )
                 ca = pulid.single_ca[_ca_index(i, n_s, len(pulid.single_ca))]
-                correction = F.normalize(ca(out_hs, id_tokens), p=2, dim=-1)
+                correction = _apply_ca(ca, out_hs, id_tokens, projections)
                 return out_hs + strength * _scale(i, n_s, "single") * correction, out_enc
 
             return patched

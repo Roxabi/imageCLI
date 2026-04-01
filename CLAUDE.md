@@ -16,8 +16,9 @@ Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev, FL
 
 | Engine | Model | VRAM | Notes |
 |---|---|---|---|
-| `flux2-klein` | FLUX.2-klein-4B | ~13GB | Default. Best quality/VRAM ratio. Black Forest Labs Nov 2025 |
+| `flux2-klein` | FLUX.2-klein-4B | ~8GB | Default. FP8 quanto + CPU offload. Peak VRAM: 7.84 GB. Black Forest Labs Nov 2025 |
 | `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | Face identity lock. Requires `face_image` frontmatter + PuLID weights. `uv sync --extra pulid` |
+| `pulid-flux1-dev` | FLUX.1-dev + PuLID | ~10GB | GGUF Q5_K_S + PuLID v0.9.1 face lock. 24 steps, 1024x1024. Requires `face_image` frontmatter |
 | `flux1-dev` | FLUX.1-dev | ~10GB | fp8 (sm≥89) or int8 (Ampere) via optimum-quanto. Excellent quality |
 | `flux1-schnell` | FLUX.1-schnell | ~10GB | fp8/int8 quantized. Apache 2.0, ungated. Fast 4-step generation |
 | `sd35` | SD3.5 Large Turbo | ~14GB | Fast 20-step CFG-free. T5 encoder quantized to int8 |
@@ -37,6 +38,7 @@ src/imagecli/
   engines/
     flux2_klein.py        — FLUX.2-klein-4B engine (default)
     pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
+    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1 face identity lock
     flux1_dev.py          — FLUX.1-dev quantized engine (fp8 on sm≥89, int8 on Ampere)
     flux1_schnell.py      — FLUX.1-schnell quantized engine (fp8 on sm≥89, int8 on Ampere)
     sd35.py               — SD3.5 Large Turbo engine
@@ -75,7 +77,7 @@ imagecli info        # show active config + GPU info
 
 ```markdown
 ---
-engine: flux2-klein          # flux2-klein | pulid-flux2-klein | flux1-dev | flux1-schnell | sd35
+engine: flux2-klein          # flux2-klein | pulid-flux2-klein | pulid-flux1-dev | flux1-dev | flux1-schnell | sd35
 width: 1024                  # pixels, multiple of 64
 height: 1024
 steps: 50                    # inference steps (sd35: always 20, schnell: default 4)
@@ -133,6 +135,8 @@ Priority: **CLI flag > .md frontmatter > imagecli.toml > hardcoded default**
 - FLUX.2-klein is always the default (best quality-to-VRAM ratio for 16GB)
 - `pulid-flux2-klein` always runs with `compile=False` — `torch.compile` captures original forward methods and is incompatible with per-generation transformer patching used by PuLID
 - `pulid-flux2-klein` requires external model weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` and InsightFace AntelopeV2 at `~/ComfyUI/models/insightface/`; install deps with `uv sync --extra pulid`
+- `pulid-flux1-dev` uses GGUF Q5_K_S for the transformer (~6 GB) + PuLID v0.9.1 (20 CA modules, dim=3072). Monkey-patches FluxTransformerBlock/FluxSingleTransformerBlock forward methods. Always runs with `compile=False`.
+- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1) and `pulid_flux2_klein_v2.safetensors` (Klein, deprecated for avatars)
 
 ## Benchmark
 
@@ -142,6 +146,7 @@ Run these to record real VRAM and wall-clock numbers. Each generation prints `Pe
 # Smoke test (one image per engine)
 imagecli generate "a white cat on a red chair" -e flux2-klein --seed 42
 imagecli generate face_prompt.md               -e pulid-flux2-klein  # needs face_image frontmatter
+imagecli generate face_prompt.md -e pulid-flux1-dev --no-compile  # needs face_image frontmatter
 imagecli generate "a white cat on a red chair" -e flux1-dev   --seed 42
 imagecli generate "a white cat on a red chair" -e flux1-schnell --seed 42
 imagecli generate "a white cat on a red chair" -e sd35        --seed 42
@@ -157,8 +162,9 @@ GPU support matrix:
 
 | Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
 |---|---|---|
-| `flux2-klein` | ✓ bf16 | ✗ too large (~13GB) |
+| `flux2-klein` | ✓ fp8 + cpu_offload | ✗ too large (~13GB) |
 | `pulid-flux2-klein` | ✓ bf16 + cpu_offload | ✗ too large |
+| `pulid-flux1-dev` | ✓ GGUF Q5_K_S + PuLID | ✗ too large |
 | `flux1-dev` | ✓ fp8 | ✓ int8 |
 | `flux1-schnell` | ✓ fp8 | ✓ int8 |
 | `sd35` | ✓ int8 T5 | ✗ too large (~14GB) |
