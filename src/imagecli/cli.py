@@ -157,6 +157,14 @@ def generate(
     ] = None,
     output_dir: Annotated[Optional[str], typer.Option("--output-dir")] = None,
     fmt: Annotated[str, typer.Option("--format", help="Output format: png | jpg | webp")] = "png",
+    face_image: Annotated[
+        Optional[str],
+        typer.Option("--face-image", help="Reference face image for PuLID engines."),
+    ] = None,
+    pulid_strength: Annotated[
+        Optional[float],
+        typer.Option("--pulid-strength", help="PuLID identity lock strength (default 0.6)."),
+    ] = None,
     no_compile: Annotated[
         bool, typer.Option("--no-compile", help="Skip torch.compile (faster startup, slower gen).")
     ] = False,
@@ -183,8 +191,11 @@ def generate(
         negative_explicit = bool(negative) or bool(doc.negative_prompt)
         steps_explicit = steps is not None or doc.steps is not None
         guidance_explicit = guidance is not None or doc.guidance is not None
-        face_img = _resolve_face_image(doc.face_image, path.parent)
-        pulid_str = doc.pulid_strength
+        face_img = (
+            _resolve_face_image(face_image, Path.cwd())
+            or _resolve_face_image(doc.face_image, path.parent)
+        )
+        pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -199,8 +210,8 @@ def generate(
         negative_explicit = bool(negative)
         steps_explicit = steps is not None
         guidance_explicit = guidance is not None
-        face_img = None
-        pulid_str = 0.6
+        face_img = _resolve_face_image(face_image, Path.cwd())
+        pulid_str = pulid_strength if pulid_strength is not None else 0.6
 
     if output:
         out_path = Path(output)
