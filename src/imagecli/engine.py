@@ -108,11 +108,16 @@ class ImageEngine(ABC):
         **kwargs,
     ) -> Path:
         """Generate an image and save it to output_path. Returns the saved path."""
+        import random
+
         import torch
 
         self._load()
 
-        generator = torch.Generator("cuda").manual_seed(seed) if seed is not None else None
+        # Auto-generate seed when none provided — ensures reproducibility
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        generator = torch.Generator("cuda").manual_seed(seed)
 
         pipe_kwargs = self._build_pipe_kwargs(
             prompt,
@@ -134,7 +139,19 @@ class ImageEngine(ABC):
 
         image = result.images[0]
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(str(output_path))
+
+        # Embed seed in PNG metadata for reproducibility
+        from PIL.PngImagePlugin import PngInfo
+
+        png_meta = PngInfo()
+        png_meta.add_text("seed", str(seed))
+        png_meta.add_text("engine", self.name)
+        png_meta.add_text("steps", str(steps))
+        png_meta.add_text("guidance", str(guidance))
+        png_meta.add_text("width", str(width))
+        png_meta.add_text("height", str(height))
+        image.save(str(output_path), pnginfo=png_meta)
+
         return output_path
 
     def _finalize_load(self, pipe: object) -> None:
@@ -152,8 +169,12 @@ class ImageEngine(ABC):
             pipe.to("cuda")
         self._optimize_pipe(pipe)
 
-    def _optimize_pipe(self, pipe: object) -> None:
-        """Apply performance optimizations to a loaded pipeline."""
+    def _optimize_pipe(self, pipe: object, *, compile: bool | None = None) -> None:
+        """Apply performance optimizations to a loaded pipeline.
+
+        compile=False overrides self._compile (use when CPU offload hooks are active,
+        since torch.compile is incompatible with enable_model_cpu_offload).
+        """
         global _tf32_set  # noqa: PLW0603
         import torch
 
@@ -168,7 +189,7 @@ class ImageEngine(ABC):
             pipe.vae.enable_slicing()
 
         # torch.compile — fuses kernels for 20-40% speedup after first-run warmup
-        if self._compile and not self._compiled:
+        if (self._compile if compile is None else compile) and not self._compiled:
             compilable = None
             if hasattr(pipe, "transformer"):
                 compilable = pipe.transformer

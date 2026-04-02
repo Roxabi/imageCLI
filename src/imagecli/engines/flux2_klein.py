@@ -13,7 +13,7 @@ class Flux2KleinEngine(ImageEngine):
     name = "flux2-klein"
     description = "FLUX.2-klein-4B — best quality for 16GB VRAM (Black Forest Labs, Nov 2025)"
     model_id = "black-forest-labs/FLUX.2-klein-4B"
-    vram_gb = 12.0
+    vram_gb = 8.0  # FP8 + CPU offload, peak ~7.84 GB
     capabilities = EngineCapabilities(negative_prompt=False)
 
     def _load(self):
@@ -42,8 +42,8 @@ class Flux2KleinEngine(ImageEngine):
         def _fwd_cont(self, input):
             return _orig_fwd(self, input.contiguous())
         QLinear.forward = _fwd_cont
-        # CPU offload: text encoder (7.5 GB) must be off GPU before VAE decode
-        # at 1024x1024. Offload moves each component to GPU only when needed.
+        # CPU offload: layers moved to GPU on-demand, rest stays in RAM.
+        # Peak VRAM: ~7.84 GB (transformer chunks + VAE). Fits in 12GB+ with headroom.
         self._pipe.enable_model_cpu_offload()
-        self._optimize_pipe(self._pipe)
+        self._optimize_pipe(self._pipe, compile=False)  # compile incompatible with offload hooks
         logger.info("Model ready.")

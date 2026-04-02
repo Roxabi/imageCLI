@@ -107,6 +107,70 @@ Quantization type is selected at load time based on GPU compute capability:
 Always call `freeze(component)` after `quantize()` and before `enable_model_cpu_offload()`.
 Wrap quantization in try/except and fall back to bf16 with a warning.
 
+## PuLID Architecture
+
+### pulid-flux2-klein
+
+`pulid_flux2_klein.py` injects face identity into the FLUX.2-klein-4B transformer at inference
+time via cross-attention (CA) modules. Key design points:
+
+**CA weight loading (`_PuLIDFlux2.from_safetensors`)**
+
+The safetensors file uses the key prefixes `pulid_ca_double.N.*` and `pulid_ca_single.N.*`, which
+do not match the `nn.ModuleList` attribute names `double_ca` and `single_ca`. The loader remaps
+these prefixes before calling `load_state_dict`. Without this remap, `strict=False` silently
+leaves all CA layers randomly initialised — only the IDFormer weights load correctly.
+
+**Auto-detected module counts**
+
+Rather than hardcoding the number of CA modules, `from_safetensors` scans the weight keys and
+computes:
+
+```python
+n_double = max(int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_double.")) + 1
+n_single = max(int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_single.")) + 1
+```
+
+The actual Klein v2 weights contain **5 double CA** and **7 single CA** modules (not 12/60).
+
+**Dim mismatch and projection (Klein 4B only)**
+
+| Component | Dim |
+|---|---|
+| PuLID Klein v2 weights (trained for Klein 9B) | 4096 |
+| Klein 4B `hidden_size` | 3072 |
+
+When these differ, `_make_projections(pulid_dim, model_dim, device, dtype)` creates two
+orthogonal-init linear layers:
+
+```
+proj_up   : Linear(3072 → 4096, bias=False)
+proj_down : Linear(4096 → 3072, bias=False)
+```
+
+`_apply_ca(ca, hidden_states, id_tokens, projections)` wraps each CA call:
+
+```
+hidden_states (3072) → proj_up → trained CA (4096) → proj_down → (3072)
+```
+
+The projection layers are randomly initialised, but the trained CA attention patterns that
+encode face identity are preserved. This contrasts with the iFayens ComfyUI approach, which
+discards all trained CA and initialises random modules at 3072.
+
+**Patching flow**
+
+`_patch_flux(transformer, pulid, id_tokens, strength)` monkey-patches each transformer block's
+`forward` method before each generation call and restores the originals in a `finally` block
+via the returned `unpatch()` callable. This is why `torch.compile` is disabled: compilation
+captures the original (unpatched) forward closures.
+
+### pulid-flux1-dev
+
+Uses PuLID v0.9.1 with `dim=3072` — no projection needed because the model dim matches the
+weight dim exactly. Patches `FluxTransformerBlock` and `FluxSingleTransformerBlock` forward
+methods (20 CA modules total).
+
 ## GPU Support Matrix
 
 | Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |

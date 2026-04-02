@@ -135,8 +135,10 @@ Priority: **CLI flag > .md frontmatter > imagecli.toml > hardcoded default**
 - FLUX.2-klein is always the default (best quality-to-VRAM ratio for 16GB)
 - `pulid-flux2-klein` always runs with `compile=False` — `torch.compile` captures original forward methods and is incompatible with per-generation transformer patching used by PuLID
 - `pulid-flux2-klein` requires external model weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` and InsightFace AntelopeV2 at `~/ComfyUI/models/insightface/`; install deps with `uv sync --extra pulid`
+- `pulid-flux2-klein` CA loading: `from_safetensors()` remaps `pulid_ca_double.N.*` → `double_ca.N.*` and `pulid_ca_single.N.*` → `single_ca.N.*` (fixes silent random-init that `strict=False` masked). CA module counts are auto-detected from weight keys (actual weights: 5 double + 7 single).
+- `pulid-flux2-klein` dim projection: PuLID Klein v2 weights are dim=4096 (trained for Klein 9B); Klein 4B has hidden_size=3072. `_make_projections()` creates orthogonal-init `proj_up` (3072→4096) and `proj_down` (4096→3072) layers so the trained CA attention patterns are preserved. `_apply_ca()` runs `hidden_states → proj_up → trained CA → proj_down`. This differs from the iFayens ComfyUI approach, which discards all trained CA and uses random ones at 3072.
 - `pulid-flux1-dev` uses GGUF Q5_K_S for the transformer (~6 GB) + PuLID v0.9.1 (20 CA modules, dim=3072). Monkey-patches FluxTransformerBlock/FluxSingleTransformerBlock forward methods. Always runs with `compile=False`.
-- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1) and `pulid_flux2_klein_v2.safetensors` (Klein, deprecated for avatars)
+- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1) and `pulid_flux2_klein_v2.safetensors` (Klein)
 
 ## Benchmark
 

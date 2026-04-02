@@ -402,6 +402,8 @@ class PuLIDFlux1DevEngine(ImageEngine):
         self._insightface: object | None = None
         self._eva_clip_trunk: object | None = None
         self._eva_clip_head: object | None = None
+        self._cached_face_path: str | None = None
+        self._cached_id_tokens: torch.Tensor | None = None
 
     def _load(self) -> None:
         if self._pipe is not None:
@@ -528,6 +530,8 @@ class PuLIDFlux1DevEngine(ImageEngine):
         output_path: Path,
         **kwargs,
     ) -> Path:
+        import gc
+
         if not face_image:
             raise ValueError(
                 "pulid-flux1-dev requires 'face_image' in the prompt frontmatter.\n"
@@ -535,29 +539,33 @@ class PuLIDFlux1DevEngine(ImageEngine):
             )
 
         self._load()
-        id_tokens = self._extract_id_tokens(face_image)
 
-        # EVA-CLIP is done — move to CPU to free ~0.8 GB before the diffusion forward
-        if self._eva_clip_trunk is not None:
-            self._eva_clip_trunk.to("cpu")
-        if self._eva_clip_head is not None:
-            self._eva_clip_head.to("cpu")
-        torch.cuda.empty_cache()
+        # Cache id_tokens — same face image = same tokens, no need to re-extract
+        if self._cached_face_path != face_image:
+            id_tokens = self._extract_id_tokens(face_image)
+            self._cached_id_tokens = id_tokens
+            self._cached_face_path = face_image
+            # EVA-CLIP is done — move to CPU permanently (only needed for extraction)
+            if self._eva_clip_trunk is not None:
+                self._eva_clip_trunk.to("cpu")
+            if self._eva_clip_head is not None:
+                self._eva_clip_head.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
 
-        unpatch = _patch_flux1(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)
+        unpatch = _patch_flux1(self._pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength)
         try:
             return super().generate(prompt, output_path=output_path, **kwargs)
         finally:
             unpatch()
-            # Restore EVA-CLIP to GPU for the next generation
-            if self._eva_clip_trunk is not None:
-                self._eva_clip_trunk.to("cuda")
-            if self._eva_clip_head is not None:
-                self._eva_clip_head.to("cuda")
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def cleanup(self) -> None:
         self._pulid = None
         self._insightface = None
         self._eva_clip_trunk = None
         self._eva_clip_head = None
+        self._cached_face_path = None
+        self._cached_id_tokens = None
         super().cleanup()

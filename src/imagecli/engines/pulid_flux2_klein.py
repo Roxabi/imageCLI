@@ -235,10 +235,11 @@ def _patch_flux(
         orig_d[idx] = block.forward
 
         def make_double(i: int):
-            # Flux2TransformerBlock uses temb_mod_img / temb_mod_txt (not temb)
+            # Flux2TransformerBlock returns (encoder_hidden_states, hidden_states)
+            # — text first, image second. PuLID correction targets the IMAGE stream.
             def patched(hidden_states=None, encoder_hidden_states=None,
                         temb_mod_img=None, temb_mod_txt=None, **kwargs):
-                out_hs, out_enc = orig_d[i](
+                enc_hs, img_hs = orig_d[i](
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     temb_mod_img=temb_mod_img,
@@ -246,8 +247,9 @@ def _patch_flux(
                     **kwargs,
                 )
                 ca = pulid.double_ca[_ca_index(i, n_d, len(pulid.double_ca))]
-                correction = _apply_ca(ca, out_hs, id_tokens, projections)
-                return out_hs + strength * _scale(i, n_d, "double") * correction, out_enc
+                img_bf = img_hs.to(torch.bfloat16)
+                correction = _apply_ca(ca, img_bf, id_tokens, projections)
+                return enc_hs, img_bf + strength * _scale(i, n_d, "double") * correction
 
             return patched
 
@@ -257,17 +259,18 @@ def _patch_flux(
         orig_s[idx] = block.forward
 
         def make_single(i: int):
-            # Flux2SingleTransformerBlock uses temb_mod and returns (hidden_states, encoder_hidden_states)
+            # Flux2SingleTransformerBlock returns a SINGLE tensor (not a tuple)
             def patched(hidden_states=None, encoder_hidden_states=None, temb_mod=None, **kwargs):
-                out_hs, out_enc = orig_s[i](
+                out_hs = orig_s[i](
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     temb_mod=temb_mod,
                     **kwargs,
                 )
                 ca = pulid.single_ca[_ca_index(i, n_s, len(pulid.single_ca))]
-                correction = _apply_ca(ca, out_hs, id_tokens, projections)
-                return out_hs + strength * _scale(i, n_s, "single") * correction, out_enc
+                out_bf = out_hs.to(torch.bfloat16)
+                correction = _apply_ca(ca, out_bf, id_tokens, projections)
+                return out_bf + strength * _scale(i, n_s, "single") * correction
 
             return patched
 

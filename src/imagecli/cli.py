@@ -90,6 +90,8 @@ def _run_generate(
     console.print(f"Size: {width}×{height}  Steps: {steps}  Guidance: {guidance}")
     if seed is not None:
         console.print(f"Seed: {seed}")
+    else:
+        console.print("Seed: [dim]auto (saved in PNG metadata)[/dim]")
     console.print(f"Prompt: [italic]{prompt[:120]}{'…' if len(prompt) > 120 else ''}[/italic]")
     console.print(f"Output → [green]{output_path}[/green]")
 
