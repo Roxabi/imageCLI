@@ -16,7 +16,7 @@ Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev, FL
 
 | Engine | Model | VRAM | Notes |
 |---|---|---|---|
-| `flux2-klein` | FLUX.2-klein-4B | ~8GB | Default. FP8 quanto + CPU offload. Peak VRAM: 7.84 GB. Black Forest Labs Nov 2025 |
+| `flux2-klein` | FLUX.2-klein-4B | ~8GB | Default. FP8 quanto. Single: CPU offload (~8 GB). Batch: 2-phase (~8 GB encode, ~4 GB generate). BFL Nov 2025 |
 | `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | Face identity lock. Requires `face_image` frontmatter + PuLID weights. `uv sync --extra pulid` |
 | `pulid-flux1-dev` | FLUX.1-dev + PuLID | ~10GB | GGUF Q5_K_S + PuLID v0.9.1 face lock. 24 steps, 1024x1024. Requires `face_image` frontmatter |
 | `flux1-dev` | FLUX.1-dev | ~10GB | fp8 (sm≥89) or int8 (Ampere) via optimum-quanto. Excellent quality |
@@ -110,27 +110,41 @@ Priority: **CLI flag > .md frontmatter > imagecli.toml > hardcoded default**
 
 ## Performance
 
-`_optimize_pipe(pipe, compile=True)` is called once during `_load()` on every engine:
+`_optimize_pipe(pipe, compile=...)` is called once during `_load()` on every engine:
 
 - `torch.set_float32_matmul_precision("high")` — TF32 tensor cores on Blackwell (~10-15% speedup)
 - `pipe.vae.enable_tiling()` + `pipe.vae.enable_slicing()` — reduces peak VRAM for large images
-- `torch.compile(transformer, mode="max-autotune-no-cudagraphs")` — kernel fusion (~20-40% speedup after first-run warmup); skipped with `--no-compile`
-- `torch.cuda.set_per_process_memory_fraction(0.85)` — caps PyTorch VRAM at 85% of total
+- `torch.compile(transformer, mode="max-autotune-no-cudagraphs")` — kernel fusion (~20-40% speedup after first-run warmup); skipped with `--no-compile` or `compile=False`
 - All inference runs under `torch.inference_mode()`
 
 `--no-compile` disables `torch.compile` on both `generate` and `batch`. Use it for faster startup or when testing.
+
+### flux2-klein: Automatic Mode Selection
+
+`flux2-klein` uses different VRAM strategies depending on the command:
+
+| Command | Mode | Peak VRAM | Compile | Why |
+|---------|------|-----------|---------|-----|
+| `generate` | CPU offload | ~8 GB | No | Faster for 1-2 images — no compile warmup, no GPU load overhead |
+| `batch` | 2-phase | ~8 GB (encode) → ~4 GB (generate) | Yes | Encode all prompts with text encoder on GPU, then generate all images with transformer+VAE on GPU. Compile pays off over many images |
+
+**2-phase batch flow:**
+1. **Phase 1 (encode):** Text encoder loaded to GPU (~8 GB). All prompts encoded, embeddings cached on CPU. Encoder offloaded.
+2. **Phase 2 (generate):** Transformer FP8 (~3.9 GB) + VAE (~0.17 GB) loaded to GPU. `torch.compile` applied. All images generated from cached embeddings.
+
+Engines that set `supports_two_phase = True` get this optimization. Other engines (or mixed-engine batches) fall back to sequential per-image generation.
 
 ## Key Patterns
 
 - Engines are lazy-loaded — model loaded in `_load()` on first `generate()` call, not on import
 - Engine registry in `engine.py:_get_registry()` — add new engines there
-- `enable_model_cpu_offload()` used on all engines to handle VRAM pressure
+- `enable_model_cpu_offload()` used on most engines (flux2-klein uses it for `generate`, 2-phase for `batch`)
 - Adaptive quantization via `optimum-quanto`: fp8 on sm≥89 (Ada/Blackwell), int8 on Ampere (sm≥80). SD3.5 T5 always int8.
 - `_get_compute_capability()` in `engine.py` detects GPU architecture for quantization selection
 - `preflight_check()` runs before `_load()` — abort early rather than OOM mid-load
 - `cleanup()` always runs in `finally` after generation (even on failure)
-- `_optimize_pipe()` called once inside `_load()`; `_compiled` flag prevents double-compile
-- Batch mode caches engine instances — one model load per engine across all files in the batch
+- `_optimize_pipe(pipe, compile=...)` called once inside `_load()`; `_compiled` flag prevents double-compile
+- Batch mode: 2-phase for engines that `supports_two_phase` (flux2-klein), sequential for others or mixed-engine batches
 - Output files never overwrite existing ones — suffix `_1`, `_2` etc. added automatically
 - FLUX.2-klein is always the default (best quality-to-VRAM ratio for 16GB)
 - `pulid-flux2-klein` always runs with `compile=False` — `torch.compile` captures original forward methods and is incompatible with per-generation transformer patching used by PuLID
@@ -164,7 +178,7 @@ GPU support matrix:
 
 | Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
 |---|---|---|
-| `flux2-klein` | ✓ fp8 + cpu_offload | ✗ too large (~13GB) |
+| `flux2-klein` | ✓ fp8 + offload/2-phase | ✗ too large (~13GB) |
 | `pulid-flux2-klein` | ✓ bf16 + cpu_offload | ✗ too large |
 | `pulid-flux1-dev` | ✓ GGUF Q5_K_S + PuLID | ✗ too large |
 | `flux1-dev` | ✓ fp8 | ✓ int8 |

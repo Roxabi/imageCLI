@@ -63,6 +63,10 @@ Copy `imagecli.example.toml` to `~/imagecli.toml` and adjust defaults if needed.
            self._pipe = SomePipeline.from_pretrained(self.model_id)
            self._pipe.enable_model_cpu_offload()
            self._optimize_pipe(self._pipe)
+           # Note: engines that set supports_two_phase = True implement
+           # load_for_encode(), encode_prompt(), start_generation_phase(),
+           # and generate_from_embeddings() instead of using CPU offload
+           # for the batch path. See flux2_klein.py for a reference.
 
        def generate(self, prompt, *, output_path, **kwargs):
            if not hasattr(self, "_pipe"):

@@ -15,7 +15,7 @@ Use this checklist when reviewing PRs that touch `src/imagecli/`.
 
 - [ ] `preflight_check(engine)` is called before `_load()` in the CLI layer.
 - [ ] `engine.vram_gb` is set to a realistic value (measure with `nvidia-smi`, round up).
-- [ ] `enable_model_cpu_offload(gpu_id=0)` is called after pipeline creation.
+- [ ] `enable_model_cpu_offload(gpu_id=0)` is called after pipeline creation, or 2-phase batch methods are implemented when `supports_two_phase = True`.
 - [ ] `torch.cuda.set_per_process_memory_fraction(0.85)` is called in `_load()`.
 - [ ] New engine uses `self._finalize_load(self._pipe)` instead of manual setup.
 
@@ -53,7 +53,7 @@ Use this checklist when reviewing PRs that touch `src/imagecli/`.
 - [ ] Domain errors use `InsufficientResourcesError` or `ValueError`, not framework
       exceptions.
 - [ ] Quantization wrapped in try/except with bf16 fallback and logged warning.
-- [ ] `freeze()` called after `quantize()` before `enable_model_cpu_offload()`.
+- [ ] `freeze()` called after `quantize()` before `enable_model_cpu_offload()` (or before the generation phase for 2-phase engines).
 - [ ] No bare `except:` — always catch specific exceptions.
 - [ ] Errors propagate to the caller — engines don't swallow exceptions silently.
 

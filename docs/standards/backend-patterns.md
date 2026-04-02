@@ -62,7 +62,7 @@ All engines are registered in `engine.py:_get_registry()`. Adding a new engine r
 
 ## CPU Offload
 
-Every engine calls `enable_model_cpu_offload(gpu_id=0)` immediately after pipeline
+Most engines call `enable_model_cpu_offload(gpu_id=0)` immediately after pipeline
 creation. This allows layers to reside in system RAM and stream to GPU on demand,
 preventing OOM on 16 GB cards:
 
@@ -75,6 +75,12 @@ torch.cuda.set_per_process_memory_fraction(0.85)
 
 Use `self._finalize_load(self._pipe)` to apply CPU offload, VRAM cap, and optimizations
 in one call — don't duplicate these steps across engines.
+
+**Alternative: 2-phase batch.** Engines that set `supports_two_phase = True` skip CPU
+offload for batch mode. Instead they implement `load_for_encode()`, `encode_prompt()`,
+`start_generation_phase()`, and `generate_from_embeddings()`. The batch command detects
+this and calls `_batch_two_phase()`, which encodes all prompts first, then runs all
+inference passes. Single-image generation on the same engine still uses CPU offload.
 
 ## Quantization
 
@@ -173,7 +179,7 @@ When writing or reviewing engine code, verify:
 
 1. `_load()` starts with `if self._pipe is not None: return`
 2. `torch` / `diffusers` imported inside methods, not at top
-3. `_finalize_load(self._pipe)` called at end of `_load()`
+3. `_finalize_load(self._pipe)` called at end of `_load()` (or 2-phase methods implemented when `supports_two_phase = True`)
 4. `EngineCapabilities` declared with correct `fixed_steps` / `fixed_guidance` / `negative_prompt`
 5. Engine registered in `_get_registry()` with kebab-case key matching `name`
 6. No imports from `cli.py` or other engines

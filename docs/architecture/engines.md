@@ -45,7 +45,7 @@ Defined in `src/imagecli/engine.py`.
 
 **Concrete helpers:**
 
-- `_optimize_pipe(pipe, compile=True)` — applies TF32 matmul precision, VAE tiling/slicing, and `torch.compile` on the transformer or unet. Compile mode is `max-autotune-no-cudagraphs` (safe for variable input shapes). Compilation is skipped after the first call (`_compiled` flag).
+- `_optimize_pipe(pipe, *, compile: bool | None = None)` — applies TF32 matmul precision, VAE tiling/slicing, and `torch.compile` on the transformer or unet. Compile mode is `max-autotune-no-cudagraphs` (safe for variable input shapes). Compilation is skipped after the first call (`_compiled` flag). When `compile` is `None`, the engine's own `_compile` attribute is used.
 - `cleanup()` — frees VRAM cache and triggers Python GC.
 
 **Module-level helpers:**
@@ -60,6 +60,7 @@ Defined in `src/imagecli/engine.py`.
 | `description` | `str` | Shown by `imagecli engines` |
 | `model_id` | `str` | HuggingFace repo ID |
 | `vram_gb` | `float` | Minimum free VRAM required (used by preflight check) |
+| `supports_two_phase` | `bool` | Set to `True` to opt in to 2-phase batch encoding (default `False`) |
 
 ## Registry
 
@@ -82,9 +83,9 @@ Defined in `src/imagecli/engine.py`.
 ## Adding a New Engine
 
 1. Create `src/imagecli/engines/<slug>.py`.
-2. Subclass `ImageEngine`, set the four class attributes.
+2. Subclass `ImageEngine`, set the four class attributes (plus `supports_two_phase = True` if applicable).
 3. Implement `__init__` (set `self._pipe = None`), `_load()`, and `generate()`.
-4. In `_load()`: load model, apply quantization if needed, call `enable_model_cpu_offload()`, then `self._optimize_pipe(self._pipe, compile=getattr(self, "_compile", True))`.
+4. In `_load()`: load model, apply quantization if needed, call `enable_model_cpu_offload()`, then `self._optimize_pipe(self._pipe, compile=getattr(self, "_compile", True))`. Engines with 2-phase batch implement `load_for_encode()`, `encode_prompt()`, `start_generation_phase()`, and `generate_from_embeddings()` instead of using CPU offload for the batch path.
 5. In `generate()`: wrap the pipeline call in `torch.inference_mode()`.
 6. Add the import and key to `_get_registry()` in `engine.py`.
 7. Add a row to the engine table in `CLAUDE.md`.
@@ -101,10 +102,11 @@ Quantization type is selected at load time based on GPU compute capability:
 
 - **fp8** requires sm≥89 (Ada Lovelace, Blackwell) — native hardware support
 - **int8** works on Ampere (sm_80+) and newer — halves VRAM vs bf16
-- **FLUX.2-klein**: fp8 (`qfloat8`) + CPU offload, peak ~8 GB
+- **FLUX.2-klein**: fp8 (`qfloat8`) + CPU offload for single-image generation (peak ~8 GB); 2-phase batch skips CPU offload and keeps transformer + VAE on GPU across phases
 - **SD3.5 T5 encoder**: always int8 regardless of GPU
 
 Always call `freeze(component)` after `quantize()` and before `enable_model_cpu_offload()`.
+For engines using 2-phase batch, `freeze()` is still called immediately after `quantize()` — CPU offload is simply not applied during the generation phase.
 Wrap quantization in try/except and fall back to bf16 with a warning.
 
 ## PuLID Architecture
@@ -175,7 +177,7 @@ methods (20 CA modules total).
 
 | Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
 |---|---|---|
-| `flux2-klein` | ✓ fp8 + cpu_offload | ✗ too large (~13GB) |
+| `flux2-klein` | ✓ fp8 + offload/2-phase | ✗ too large (~13GB) |
 | `pulid-flux2-klein` | ✓ bf16 + cpu_offload | ✗ too large |
 | `pulid-flux1-dev` | ✓ GGUF Q5_K_S + PuLID | ✗ too large |
 | `flux1-dev` | ✓ fp8 | ✓ int8 |
@@ -220,3 +222,20 @@ then moves them back to CPU. This trades throughput for memory: a 13 GB model ca
 on a 16 GB card while other processes hold several GB. The 0.85 memory fraction cap
 prevents the CUDA allocator from reserving the full device, preserving headroom for
 the CUDA runtime and OS.
+
+### Two-Phase Batch (flux2-klein)
+
+For batch mode, `flux2-klein` uses a 2-phase strategy instead of CPU offload:
+
+- **Phase 1 — encode:** Text encoder runs on GPU for all prompts in the batch (~8 GB),
+  producing pooled embeddings for every file before inference begins.
+- **Phase 2 — generate:** Transformer + VAE run on GPU with `torch.compile` applied
+  (~4 GB), iterating over the pre-computed embeddings.
+
+This avoids the per-image offload overhead that CPU offload incurs when the same model
+is called repeatedly. The batch command detects `supports_two_phase = True` and routes
+to `_batch_two_phase()` automatically; engines that do not set this flag use the
+standard sequential path `_batch_sequential()`.
+
+Single-image generation with `flux2-klein` still uses CPU offload (`compile=False`)
+for lowest peak VRAM.

@@ -106,6 +106,8 @@ User ──"a cat in space"──► CLI generate()
                                │
                                ├── _load()  ──► download weights, quantize, CPU offload, compile
                                │               (idempotent — returns early if already loaded)
+                               │               (flux2-klein batch uses 2-phase: encode all prompts,
+                               │                then generate all images — no CPU offload in that path)
                                │
                                ├── torch.inference_mode()
                                │
@@ -123,6 +125,7 @@ Same as single generation, but:
 - Engine instances are **cached** across files (one model load per engine type)
 - Cleanup runs **once** at the end, after all files are processed
 - Each `.md` file's frontmatter can specify a different engine
+- Engines with `supports_two_phase = True` (e.g. `flux2-klein`) use a 2-phase path: all prompts are encoded first (Phase 1), then all images are generated (Phase 2), avoiding per-image CPU offload overhead
 
 ## Entry Points
 

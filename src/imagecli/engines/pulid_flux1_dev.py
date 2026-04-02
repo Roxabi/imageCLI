@@ -206,10 +206,10 @@ class _PerceiverAttentionCA(nn.Module):
         self.heads = heads
         inner_dim = dim_head * heads  # 2048
 
-        self.norm1 = nn.LayerNorm(kv_dim)   # norm for id_tokens (kv_dim=2048)
-        self.norm2 = nn.LayerNorm(dim)      # norm for hidden_states (dim=3072)
+        self.norm1 = nn.LayerNorm(kv_dim)  # norm for id_tokens (kv_dim=2048)
+        self.norm2 = nn.LayerNorm(dim)  # norm for hidden_states (dim=3072)
 
-        self.to_q = nn.Linear(dim, inner_dim, bias=False)    # hidden -> queries
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)  # hidden -> queries
         self.to_kv = nn.Linear(kv_dim, inner_dim * 2, bias=False)  # id -> k,v
         self.to_out = nn.Linear(inner_dim, dim, bias=False)  # -> dim=3072
 
@@ -225,12 +225,12 @@ class _PerceiverAttentionCA(nn.Module):
         id_tokens = id_tokens.to(dtype)
         hidden_states = hidden_states.to(dtype)
 
-        id_n = self.norm1(id_tokens)        # (B, 32, 2048)
-        hs_n = self.norm2(hidden_states)    # (B, N, 3072)
+        id_n = self.norm1(id_tokens)  # (B, 32, 2048)
+        hs_n = self.norm2(hidden_states)  # (B, N, 3072)
 
         b, seq_len, _ = hidden_states.shape
 
-        q = self.to_q(hs_n)                 # (B, N, 2048)
+        q = self.to_q(hs_n)  # (B, N, 2048)
         k, v = self.to_kv(id_n).chunk(2, dim=-1)  # each (B, 32, 2048)
 
         q, k, v = (_reshape_tensor(t, self.heads) for t in (q, k, v))
@@ -251,9 +251,7 @@ class _PuLIDFlux1(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.pulid_encoder = _IDFormer()
-        self.pulid_ca = nn.ModuleList([
-            _PerceiverAttentionCA() for _ in range(_NUM_CA)
-        ])
+        self.pulid_ca = nn.ModuleList([_PerceiverAttentionCA() for _ in range(_NUM_CA)])
 
     @classmethod
     def from_safetensors(cls, path: Path) -> "_PuLIDFlux1":
@@ -388,9 +386,7 @@ GGUF_FILE = "flux1-dev-Q5_K_S.gguf"
 
 class PuLIDFlux1DevEngine(ImageEngine):
     name = "pulid-flux1-dev"
-    description = (
-        "FLUX.1-dev GGUF Q5_K_S + PuLID face lock — requires face_image in frontmatter"
-    )
+    description = "FLUX.1-dev GGUF Q5_K_S + PuLID face lock — requires face_image in frontmatter"
     model_id = "black-forest-labs/FLUX.1-dev"
     vram_gb = 8.0  # peak ~8-10 GB with cpu_offload
     capabilities = EngineCapabilities(negative_prompt=False)
@@ -553,7 +549,9 @@ class PuLIDFlux1DevEngine(ImageEngine):
             gc.collect()
             torch.cuda.empty_cache()
 
-        unpatch = _patch_flux1(self._pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength)
+        unpatch = _patch_flux1(
+            self._pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength
+        )
         try:
             return super().generate(prompt, output_path=output_path, **kwargs)
         finally:

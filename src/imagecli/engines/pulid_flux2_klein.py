@@ -106,16 +106,25 @@ class _PuLIDFlux2(nn.Module):
 
         # Auto-detect CA module counts from key structure.
         # Weights use pulid_ca_double.N.* / pulid_ca_single.N.* prefixes.
-        n_double = max(
-            (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_double.")),
-            default=-1,
-        ) + 1
-        n_single = max(
-            (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_single.")),
-            default=-1,
-        ) + 1
+        n_double = (
+            max(
+                (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_double.")),
+                default=-1,
+            )
+            + 1
+        )
+        n_single = (
+            max(
+                (int(k.split(".")[1]) for k in state if k.startswith("pulid_ca_single.")),
+                default=-1,
+            )
+            + 1
+        )
         logger.info(
-            "PuLID weights: dim=%d, %d double CA, %d single CA", dim, n_double, n_single,
+            "PuLID weights: dim=%d, %d double CA, %d single CA",
+            dim,
+            n_double,
+            n_single,
         )
 
         model = cls(dim=dim, n_double_ca=n_double, n_single_ca=n_single)
@@ -152,8 +161,8 @@ def _detect_variant(transformer: object) -> tuple[str, int, int, int]:
     """Return (variant_name, hidden_dim, n_double, n_single) for Klein 4B / 9B."""
     dm = _get_flux_inner(transformer)
     double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
-    single_blocks = (
-        getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
+    single_blocks = getattr(dm, "single_transformer_blocks", None) or getattr(
+        dm, "single_blocks", []
     )
     n_d, n_s = len(double_blocks), len(single_blocks)
     if n_d <= 6 and n_s <= 22:
@@ -181,7 +190,9 @@ def _make_projections(
     """Create up/down projection pair if dims mismatch. Returns None if no projection needed."""
     if pulid_dim == model_dim:
         return None
-    logger.info("Dim mismatch: model=%d, PuLID=%d — creating projection layers", model_dim, pulid_dim)
+    logger.info(
+        "Dim mismatch: model=%d, PuLID=%d — creating projection layers", model_dim, pulid_dim
+    )
     proj_up = nn.Linear(model_dim, pulid_dim, bias=False)
     proj_down = nn.Linear(pulid_dim, model_dim, bias=False)
     # Orthogonal init preserves norms better than random normal for pass-through projections
@@ -216,16 +227,18 @@ def _patch_flux(
     """Monkey-patch transformer blocks to inject PuLID identity. Returns unpatch callable."""
     dm = _get_flux_inner(transformer)
     double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
-    single_blocks = (
-        getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
+    single_blocks = getattr(dm, "single_transformer_blocks", None) or getattr(
+        dm, "single_blocks", []
     )
     n_d, n_s = len(double_blocks), len(single_blocks)
 
     # Detect dim mismatch and create projections if needed
     _, model_dim, _, _ = _detect_variant(transformer)
     projections = _make_projections(
-        pulid.dim, model_dim,
-        device=id_tokens.device, dtype=id_tokens.dtype,
+        pulid.dim,
+        model_dim,
+        device=id_tokens.device,
+        dtype=id_tokens.dtype,
     )
 
     orig_d: dict[int, object] = {}
@@ -237,8 +250,13 @@ def _patch_flux(
         def make_double(i: int):
             # Flux2TransformerBlock returns (encoder_hidden_states, hidden_states)
             # — text first, image second. PuLID correction targets the IMAGE stream.
-            def patched(hidden_states=None, encoder_hidden_states=None,
-                        temb_mod_img=None, temb_mod_txt=None, **kwargs):
+            def patched(
+                hidden_states=None,
+                encoder_hidden_states=None,
+                temb_mod_img=None,
+                temb_mod_txt=None,
+                **kwargs,
+            ):
                 enc_hs, img_hs = orig_d[i](
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
@@ -312,6 +330,7 @@ class PuLIDFlux2KleinEngine(ImageEngine):
             free_vram_gb = torch.cuda.mem_get_info(0)[0] / 1024**3
             if free_vram_gb < self.vram_gb:
                 from imagecli.engine import InsufficientResourcesError
+
                 raise InsufficientResourcesError(
                     f"Engine {self.name!r} needs ~{self.vram_gb:.1f} GB VRAM free, "
                     f"but only {free_vram_gb:.1f} GB is available."
@@ -324,6 +343,7 @@ class PuLIDFlux2KleinEngine(ImageEngine):
             return
 
         import os
+
         os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
         from diffusers import Flux2KleinPipeline

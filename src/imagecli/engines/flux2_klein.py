@@ -1,8 +1,14 @@
-"""FLUX.2-klein-4B engine — default, bf16, fits in ~15GB VRAM."""
+"""FLUX.2-klein-4B engine — default, FP8 quantized.
+
+Single generate: CPU offload (~8 GB peak, no compile, fastest for 1-2 images).
+Batch: 2-phase (encode all prompts → generate all images, ~4 GB peak in phase 2, compiled).
+"""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import ClassVar
 
 from imagecli.engine import EngineCapabilities, ImageEngine
 
@@ -15,11 +21,12 @@ class Flux2KleinEngine(ImageEngine):
     model_id = "black-forest-labs/FLUX.2-klein-4B"
     vram_gb = 8.0  # FP8 + CPU offload, peak ~7.84 GB
     capabilities = EngineCapabilities(negative_prompt=False)
+    supports_two_phase: ClassVar[bool] = True
 
-    def _load(self):
+    def _load_pipeline(self):
+        """Shared setup: load from pretrained, quantize transformer to FP8."""
         if self._pipe is not None:
             return
-        import gc
 
         import torch
         from diffusers import Flux2KleinPipeline
@@ -31,19 +38,115 @@ class Flux2KleinEngine(ImageEngine):
             torch_dtype=torch.bfloat16,
         )
         # Quantize transformer to FP8: 7.75 GB → ~3.9 GB.
-        # Total VRAM: text_encoder 7.49 + transformer 3.9 + VAE 0.17 = ~11.6 GB.
-        # Fits in 15.45 GB without offload.
         logger.info("Quantizing transformer to float8...")
         quantize(self._pipe.transformer, weights=qfloat8)
         freeze(self._pipe.transformer)
         # Marlin FP8 GEMM kernel requires contiguous input
         from optimum.quanto.nn import QLinear
+
         _orig_fwd = QLinear.forward
+
         def _fwd_cont(self, input):
             return _orig_fwd(self, input.contiguous())
+
         QLinear.forward = _fwd_cont
+
+    def _load(self):
+        """Single-image mode: CPU offload, no compile."""
+        if self._pipe is not None:
+            return
+        self._load_pipeline()
         # CPU offload: layers moved to GPU on-demand, rest stays in RAM.
         # Peak VRAM: ~7.84 GB (transformer chunks + VAE). Fits in 12GB+ with headroom.
         self._pipe.enable_model_cpu_offload()
         self._optimize_pipe(self._pipe, compile=False)  # compile incompatible with offload hooks
-        logger.info("Model ready.")
+        logger.info("Model ready (CPU offload mode).")
+
+    # ── 2-phase batch ──────────────────────────────────────────────────────
+
+    def load_for_encode(self):
+        """Phase 1 setup: load pipeline, move text encoder to GPU (~8 GB)."""
+        self._load_pipeline()
+        self._pipe.text_encoder.to("cuda")
+        logger.info("Text encoder on GPU — ready for prompt encoding.")
+
+    def encode_prompt(self, prompt: str) -> dict:
+        """Encode a single prompt. Returns embeddings dict (on CPU to free VRAM)."""
+        import torch
+
+        with torch.inference_mode():
+            prompt_embeds, text_ids = self._pipe.encode_prompt(
+                prompt=prompt,
+                device="cuda",
+                num_images_per_prompt=1,
+            )
+        return {
+            "prompt_embeds": prompt_embeds.cpu(),
+            "text_ids": text_ids.cpu(),
+        }
+
+    def start_generation_phase(self):
+        """Phase 2 setup: offload encoder, load transformer + VAE to GPU, compile."""
+        import gc
+
+        import torch
+
+        # Free encoder VRAM
+        self._pipe.text_encoder.to("cpu")
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        # Transformer (~3.9 GB FP8) + VAE (~0.17 GB) → ~4.1 GB on GPU
+        self._pipe.transformer.to("cuda")
+        self._pipe.vae.to("cuda")
+        self._optimize_pipe(self._pipe)
+        logger.info("Generation phase ready (transformer + VAE on GPU, ~4 GB).")
+
+    def generate_from_embeddings(
+        self,
+        embeddings: dict,
+        *,
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 50,
+        guidance: float = 4.0,
+        seed: int | None = None,
+        output_path: Path,
+        callback=None,
+    ) -> Path:
+        """Generate image from pre-computed prompt embeddings."""
+        import random
+
+        import torch
+
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        generator = torch.Generator("cuda").manual_seed(seed)
+
+        pipe_kwargs = {
+            "prompt_embeds": embeddings["prompt_embeds"].to("cuda"),
+            "width": width,
+            "height": height,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance,
+            "generator": generator,
+        }
+        if callback is not None:
+            pipe_kwargs["callback_on_step_end"] = callback
+
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+        with torch.inference_mode():
+            result = self._pipe(**pipe_kwargs)
+
+        image = result.images[0]
+        return self._save_image(
+            image,
+            output_path,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
+        )

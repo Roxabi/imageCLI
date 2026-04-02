@@ -23,7 +23,7 @@ def _make_md(path: Path, engine: str = "flux2-klein", prompt: str = "test prompt
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_discovers_md_files(mock_get_engine, mock_run, tmp_path: Path):
-    mock_get_engine.return_value = MagicMock(cleanup=MagicMock())
+    mock_get_engine.return_value = MagicMock(cleanup=MagicMock(), supports_two_phase=False)
     mock_run.return_value = Path("/fake/out.png")
 
     _make_md(tmp_path / "a.md")
@@ -38,7 +38,7 @@ def test_batch_discovers_md_files(mock_get_engine, mock_run, tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.return_value = Path("/fake/out.png")
@@ -63,7 +63,7 @@ def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_no_compile(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.return_value = Path("/fake/out.png")
@@ -84,7 +84,7 @@ def test_batch_empty_dir(tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_counts_failures(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
 
@@ -107,7 +107,7 @@ def test_batch_counts_failures(mock_get_engine, mock_run, tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_engine_override(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.return_value = Path("/fake/out.png")
@@ -123,7 +123,7 @@ def test_batch_engine_override(mock_get_engine, mock_run, tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_cleanup_called(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.return_value = Path("/fake/out.png")
@@ -138,7 +138,7 @@ def test_batch_cleanup_called(mock_get_engine, mock_run, tmp_path: Path):
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.side_effect = RuntimeError("all fail")
@@ -159,7 +159,7 @@ def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path)
 @patch("imagecli.cli._run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_shows_file_index(mock_get_engine, mock_run, tmp_path: Path):
-    mock_engine = MagicMock()
+    mock_engine = MagicMock(supports_two_phase=False)
     mock_engine.cleanup = MagicMock()
     mock_get_engine.return_value = mock_engine
     mock_run.return_value = Path("/fake/out.png")
@@ -173,3 +173,24 @@ def test_batch_shows_file_index(mock_get_engine, mock_run, tmp_path: Path):
     assert "1/3" in result.output
     assert "2/3" in result.output
     assert "3/3" in result.output
+
+
+@patch("imagecli.engine.get_engine")
+def test_batch_two_phase(mock_get_engine, tmp_path: Path):
+    """When engine supports 2-phase, batch encodes all then generates all."""
+    mock_engine = MagicMock(supports_two_phase=True)
+    mock_engine.encode_prompt.return_value = {"prompt_embeds": "fake", "text_ids": "fake"}
+    mock_engine.generate_from_embeddings.return_value = Path("/fake/out.png")
+    mock_engine.effective_steps.return_value = 4
+    mock_get_engine.return_value = mock_engine
+
+    _make_md(tmp_path / "a.md")
+    _make_md(tmp_path / "b.md")
+
+    result = runner.invoke(app, ["batch", str(tmp_path)])
+    assert result.exit_code == 0
+    assert mock_engine.load_for_encode.call_count == 1
+    assert mock_engine.encode_prompt.call_count == 2
+    assert mock_engine.start_generation_phase.call_count == 1
+    assert mock_engine.generate_from_embeddings.call_count == 2
+    assert "2 succeeded" in result.output

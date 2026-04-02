@@ -19,6 +19,7 @@ dependencies = [
     "gguf>=0.18.0",
     "einops>=0.8.2",
     "facexlib>=0.3.0",
+    "peft>=0.18.1",
 ]
 
 [project.scripts]

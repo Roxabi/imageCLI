@@ -524,6 +524,7 @@ dependencies = [
     { name = "facexlib" },
     { name = "gguf" },
     { name = "optimum", extra = ["quanto"] },
+    { name = "peft" },
     { name = "pillow" },
     { name = "protobuf" },
     { name = "sentencepiece" },
@@ -558,6 +559,7 @@ requires-dist = [
     { name = "facexlib", specifier = ">=0.3.0" },
     { name = "gguf", specifier = ">=0.18.0" },
     { name = "optimum", extras = ["quanto"], specifier = ">=1.24" },
+    { name = "peft", specifier = ">=0.18.1" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "sentencepiece", specifier = ">=0.2" },
@@ -1233,6 +1235,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/65/ee/299d360cdc32edc7d2cf530f3accf79c4fca01e96ffc950d8a52213bd8e4/packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4", size = 143416, upload-time = "2026-01-21T20:50:39.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+]
+
+[[package]]
+name = "peft"
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/48/147b3ea999560b40a34fd78724c7777aa9d18409c2250bdcaf9c4f2db7fc/peft-0.18.1.tar.gz", hash = "sha256:2dd0d6bfce936d1850e48aaddbd250941c5c02fc8ef3237cd8fd5aac35e0bae2", size = 635030, upload-time = "2026-01-09T13:08:01.136Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/14/b4e3f574acf349ae6f61f9c000a77f97a3b315b4bb6ad03791e79ae4a568/peft-0.18.1-py3-none-any.whl", hash = "sha256:0bf06847a3551e3019fc58c440cffc9a6b73e6e2962c95b52e224f77bbdb50f1", size = 556960, upload-time = "2026-01-09T13:07:55.865Z" },
 ]
 
 [[package]]

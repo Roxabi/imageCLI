@@ -92,9 +92,11 @@ class ImageEngine(ABC):
 ```
 
 The port also provides **shared infrastructure** via concrete helper methods:
-- `_finalize_load(pipe)` — CPU offload, VRAM cap, optimizations
-- `_optimize_pipe(pipe)` — TF32, VAE tiling/slicing, `torch.compile`
+- `_finalize_load(pipe)` — CPU offload, VRAM cap, optimizations (standard path; 2-phase engines use separate load/encode/generate methods instead)
+- `_optimize_pipe(pipe, *, compile: bool | None = None)` — TF32, VAE tiling/slicing, `torch.compile`
 - `_quantize_transformer(pipe, sm)` — adaptive fp8/int8 quantization
+- `_save_image(image, output_path)` — shared image persistence helper
+- `load_for_encode()`, `encode_prompt()`, `start_generation_phase()`, `generate_from_embeddings()` — 2-phase batch hooks (override when `supports_two_phase = True`)
 - `cleanup()` — VRAM cache clearing + garbage collection
 
 This is the **Template Method** pattern: the base class defines the algorithm skeleton

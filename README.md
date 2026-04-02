@@ -137,7 +137,7 @@ Public API (`__all__`): `generate`, `get_engine`, `list_engines`, `preflight_che
 
 | Engine | Model | VRAM | Steps | Speed | Notes |
 |---|---|---|---|---|---|
-| `flux2-klein` | FLUX.2-klein-4B | ~8GB | 50 | ~20s | **Default.** FP8 quanto + CPU offload. Best quality/VRAM ratio. BFL Nov 2025 |
+| `flux2-klein` | FLUX.2-klein-4B | ~8GB | 50 | ~20s | **Default.** FP8 quanto. Single: CPU offload. Batch: 2-phase (encode → generate). BFL Nov 2025 |
 | `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | 50 | ~25s | Face identity lock (Klein). Requires `face_image` in frontmatter. `uv sync --extra pulid` |
 | `pulid-flux1-dev` | FLUX.1-dev + PuLID v0.9.1 | ~10GB | 24 | ~42s | Face identity lock (recommended). GGUF Q5_K_S + PuLID. Clean 1024×1024, no banding. `uv sync --extra pulid` |
 | `flux1-dev` | FLUX.1-dev fp8 | ~10GB | 50 | ~30s | Maximum quality, longer prompts. fp8 via optimum-quanto |
@@ -187,7 +187,9 @@ imagecli batch images/prompts_in/ --output-dir ./results
 imagecli batch images/prompts_in/ --no-compile
 ```
 
-Processes every `.md` file in the directory in sorted order. Engine instances are cached across files — the model loads once per engine, not once per image.
+Processes every `.md` file in the directory in sorted order.
+
+**2-phase optimization (flux2-klein):** When all files in a batch use the same engine and the engine supports it, batch mode runs in two phases. Phase 1 loads only the text encoder to GPU (~8 GB), encodes all prompts, then offloads it. Phase 2 loads the transformer + VAE (~4 GB), compiles, and generates all images. This is faster than per-image CPU offload for batches of 3+ images.
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|

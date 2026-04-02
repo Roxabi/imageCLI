@@ -138,9 +138,29 @@ class ImageEngine(ABC):
             result = self._pipe(**pipe_kwargs)
 
         image = result.images[0]
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return self._save_image(
+            image,
+            output_path,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
+        )
 
-        # Embed seed in PNG metadata for reproducibility
+    def _save_image(
+        self,
+        image,
+        output_path: Path,
+        *,
+        seed: int,
+        steps: int,
+        guidance: float,
+        width: int,
+        height: int,
+    ) -> Path:
+        """Save image with PNG metadata for reproducibility."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         from PIL.PngImagePlugin import PngInfo
 
         png_meta = PngInfo()
@@ -151,8 +171,39 @@ class ImageEngine(ABC):
         png_meta.add_text("width", str(width))
         png_meta.add_text("height", str(height))
         image.save(str(output_path), pnginfo=png_meta)
-
         return output_path
+
+    # ── 2-phase batch interface ───────────────────────────────────────────
+    # Override in engines that benefit from splitting encoding and generation
+    # into separate GPU phases (e.g. flux2-klein).
+    supports_two_phase: ClassVar[bool] = False
+
+    def load_for_encode(self) -> None:
+        """Phase 1 setup: load pipeline and move text encoder to GPU."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def encode_prompt(self, prompt: str) -> dict:
+        """Encode a single prompt. Returns an opaque dict for generate_from_embeddings()."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def start_generation_phase(self) -> None:
+        """Transition: offload encoder, move transformer + VAE to GPU, compile."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def generate_from_embeddings(
+        self,
+        embeddings: dict,
+        *,
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 50,
+        guidance: float = 4.0,
+        seed: int | None = None,
+        output_path: Path,
+        callback: Callable[..., dict] | None = None,
+    ) -> Path:
+        """Generate image from pre-computed prompt embeddings."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
 
     def _finalize_load(self, pipe: object) -> None:
         """Move pipeline to GPU and apply optimizations. Raises if VRAM is insufficient."""
@@ -189,7 +240,8 @@ class ImageEngine(ABC):
             pipe.vae.enable_slicing()
 
         # torch.compile — fuses kernels for 20-40% speedup after first-run warmup
-        if (self._compile if compile is None else compile) and not self._compiled:
+        should_compile = self._compile if compile is None else compile
+        if should_compile and not self._compiled:
             compilable = None
             if hasattr(pipe, "transformer"):
                 compilable = pipe.transformer

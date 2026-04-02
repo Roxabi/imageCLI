@@ -29,6 +29,7 @@ def _resolve_face_image(face_image: str | None, prompt_dir: Path) -> str | None:
     p = Path(face_image)
     return str(p if p.is_absolute() else (prompt_dir / p).resolve())
 
+
 app = typer.Typer(
     name="imagecli",
     help="Local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends.",
@@ -193,9 +194,8 @@ def generate(
         negative_explicit = bool(negative) or bool(doc.negative_prompt)
         steps_explicit = steps is not None or doc.steps is not None
         guidance_explicit = guidance is not None or doc.guidance is not None
-        face_img = (
-            _resolve_face_image(face_image, Path.cwd())
-            or _resolve_face_image(doc.face_image, path.parent)
+        face_img = _resolve_face_image(face_image, Path.cwd()) or _resolve_face_image(
+            doc.face_image, path.parent
         )
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
     else:
@@ -261,22 +261,157 @@ def batch(
 
     console.print(f"Batch: {len(files)} prompt(s) found in {directory}")
 
-    from imagecli.engine import ImageEngine, get_engine
+    from imagecli.engine import get_engine
     from imagecli.markdown import parse_prompt_file
 
-    # Track the currently loaded engine so we can reuse it when consecutive
-    # prompts share the same engine, and fully unload when they don't.
-    current_engine: ImageEngine | None = None
-    current_engine_name: str | None = None
+    # Parse all files upfront to determine engines.
+    parsed = []
+    for f in files:
+        doc = parse_prompt_file(f)
+        parsed.append((f, doc, engine or doc.engine or cfg["engine"]))
 
-    n_files = len(files)
+    engine_names = {name for _, _, name in parsed}
+    single_engine = len(engine_names) == 1
+
+    if single_engine:
+        the_engine_name = engine_names.pop()
+        the_engine = get_engine(the_engine_name, compile=not no_compile)
+
+        if the_engine.supports_two_phase:
+            successes, failures = _batch_two_phase(
+                parsed, the_engine, the_engine_name, cfg, output_dir, no_compile, console
+            )
+        else:
+            successes, failures = _batch_sequential(
+                parsed,
+                cfg,
+                output_dir,
+                no_compile,
+                console,
+                initial_engine=(the_engine, the_engine_name),
+            )
+    else:
+        successes, failures = _batch_sequential(parsed, cfg, output_dir, no_compile, console)
+
+    console.rule()
+    console.print(f"Done: [green]{successes} succeeded[/green], [red]{failures} failed[/red]")
+
+
+def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, console):
+    """2-phase batch: encode all prompts, then generate all images."""
+    from imagecli.engine import preflight_check
+
+    n_files = len(parsed)
     successes, failures = 0, 0
-    for i, f in enumerate(files):
+
+    try:
+        preflight_check(engine)
+
+        # ── Phase 1: Encode ──────────────────────────────────────────────
+        console.print(
+            f"\n[bold cyan]Phase 1/2:[/bold cyan] Encoding {n_files} prompts "
+            f"(text encoder on GPU, ~8 GB)..."
+        )
+        engine.load_for_encode()
+
+        encoded = []
+        for i, (f, doc, _) in enumerate(parsed):
+            try:
+                emb = engine.encode_prompt(doc.prompt)
+                encoded.append((f, doc, emb))
+                console.print(f"  [dim]{i + 1}/{n_files}[/dim] {f.name} [green]✓[/green]")
+            except Exception as e:
+                console.print(f"  [dim]{i + 1}/{n_files}[/dim] {f.name} [red]✗ {e}[/red]")
+                failures += 1
+
+        # ── Phase 2: Generate ────────────────────────────────────────────
+        console.print(
+            f"\n[bold cyan]Phase 2/2:[/bold cyan] Generating {len(encoded)} images "
+            f"(transformer + VAE on GPU, ~4 GB)..."
+        )
+        engine.start_generation_phase()
+
+        for i, (f, doc, emb) in enumerate(encoded):
+            console.rule(f"[bold]{i + 1}/{len(encoded)}[/bold] — {f.name}")
+            try:
+                w = doc.width or cfg["width"]
+                h = doc.height or cfg["height"]
+                s = doc.steps or cfg["steps"]
+                g = doc.guidance or cfg["guidance"]
+                fmt = doc.format or cfg.get("format", "png")
+                out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
+
+                console.print(f"Engine: [bold cyan]{engine_name}[/bold cyan]")
+                console.print(f"Size: {w}×{h}  Steps: {s}  Guidance: {g}")
+                if doc.seed is not None:
+                    console.print(f"Seed: {doc.seed}")
+                console.print(f"Output → [green]{out_path}[/green]")
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Generating…", total=engine.effective_steps(s))
+
+                    def _step_callback(pipeline, step, timestep, callback_kwargs):
+                        progress.update(task, completed=step + 1)
+                        return callback_kwargs
+
+                    saved = engine.generate_from_embeddings(
+                        emb,
+                        width=w,
+                        height=h,
+                        steps=s,
+                        guidance=g,
+                        seed=doc.seed,
+                        output_path=out_path,
+                        callback=_step_callback,
+                    )
+
+                console.print(f"[bold green]Saved:[/bold green] {saved}")
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        peak_gb = torch.cuda.max_memory_reserved() / 1024**3
+                        console.print(f"Peak VRAM reserved (torch): [cyan]{peak_gb:.2f} GB[/cyan]")
+                except ImportError:
+                    pass
+
+                successes += 1
+                engine.clear_cache()
+
+            except Exception as e:
+                console.print(f"[red]FAILED:[/red] {e}")
+                failures += 1
+
+    finally:
+        engine.cleanup()
+
+    return successes, failures
+
+
+def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engine=None):
+    """Standard sequential batch: one engine at a time, CPU offload per image."""
+    from imagecli.engine import ImageEngine, get_engine
+
+    if initial_engine is not None:
+        current_engine, current_engine_name = initial_engine
+    else:
+        current_engine: ImageEngine | None = None
+        current_engine_name: str | None = None
+
+    n_files = len(parsed)
+    successes, failures = 0, 0
+    for i, (f, doc, engine_name) in enumerate(parsed):
         console.rule(f"[bold]{i + 1}/{n_files}[/bold] — {f.name}")
         try:
-            doc = parse_prompt_file(f)
-            engine_name = engine or doc.engine or cfg["engine"]
-
             # If the engine changed, fully unload the previous one first.
             if current_engine is not None and engine_name != current_engine_name:
                 console.print(
@@ -336,8 +471,7 @@ def batch(
     if current_engine is not None:
         current_engine.cleanup()
 
-    console.rule()
-    console.print(f"Done: [green]{successes} succeeded[/green], [red]{failures} failed[/red]")
+    return successes, failures
 
 
 @app.command()

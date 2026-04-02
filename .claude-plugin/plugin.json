@@ -1,0 +1,8 @@
+{
+  "name": "image-cli",
+  "version": "0.1.0",
+  "description": "Generate images with imageCLI — engine selection, prompt authoring, batch workflows, and VRAM-aware generation on local GPU.",
+  "author": {
+    "name": "Roxabi"
+  }
+}
