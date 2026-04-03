@@ -5,17 +5,12 @@ ifneq (,$(filter gen,$(firstword $(MAKECMDGOALS))))
   endif
 endif
 
-LYRA_STACK_DIR ?= $(HOME)/projects/lyra-stack
-SUPERVISORCTL  := $(LYRA_STACK_DIR)/scripts/supervisorctl.sh
-SUPERVISOR_START := $(LYRA_STACK_DIR)/scripts/start.sh
-HUB_PID        := $(LYRA_STACK_DIR)/supervisord.pid
+SUPERVISOR_HUB ?= $(HOME)/projects
+SUPERVISORCTL  := $(SUPERVISOR_HUB)/scripts/supervisorctl.sh
+SUPERVISOR_START := $(SUPERVISOR_HUB)/scripts/start.sh
+HUB_PID        := $(SUPERVISOR_HUB)/supervisord.pid
 
 define ensure_hub
-	@if [ ! -d "$(LYRA_STACK_DIR)" ]; then \
-		echo "Error: lyra-stack not found at $(LYRA_STACK_DIR)"; \
-		echo "       Clone it or set LYRA_STACK_DIR=/path/to/lyra-stack"; \
-		exit 1; \
-	fi
 	@if [ ! -f "$(HUB_PID)" ] || ! kill -0 $$(cat "$(HUB_PID)" 2>/dev/null) 2>/dev/null; then \
 		echo "Hub supervisord not running, starting..."; \
 		$(SUPERVISOR_START); \
@@ -25,16 +20,11 @@ endef
 .PHONY: register gen install lint test
 
 register:
-	@echo "Registering imageCLI with lyra-stack..."
-	@if [ ! -d "$(LYRA_STACK_DIR)" ]; then \
-		echo "Error: lyra-stack not found at $(LYRA_STACK_DIR)"; \
-		echo "       Clone it or set LYRA_STACK_DIR=/path/to/lyra-stack"; \
-		exit 1; \
-	fi
-	@mkdir -p "$(LYRA_STACK_DIR)/conf.d"
-	@ln -sf "$(abspath supervisor/conf.d/imagecli_gen.conf)" "$(LYRA_STACK_DIR)/conf.d/imagecli_gen.conf"
+	@echo "Registering imageCLI with supervisor hub..."
+	@mkdir -p "$(SUPERVISOR_HUB)/conf.d"
+	@ln -sf "$(abspath supervisor/conf.d/imagecli_gen.conf)" "$(SUPERVISOR_HUB)/conf.d/imagecli_gen.conf"
 	@mkdir -p "$(HOME)/.local/state/imagecli/logs"
-	@if [ -S "$(LYRA_STACK_DIR)/supervisor.sock" ]; then \
+	@if [ -S "$(SUPERVISOR_HUB)/supervisor.sock" ]; then \
 		$(SUPERVISORCTL) reread && $(SUPERVISORCTL) update; \
 	fi
 	@echo "Done. Run 'make gen' to start the generation daemon."

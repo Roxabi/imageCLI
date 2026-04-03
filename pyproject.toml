@@ -44,7 +44,7 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
 torchvision = [{ index = "pytorch-cu128" }]
-diffusers = { git = "https://github.com/huggingface/diffusers.git" }
+diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
 
 [tool.uv]
 override-dependencies = [
