@@ -475,6 +475,16 @@ def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engi
 
 
 @app.command()
+def serve(
+    engine: str = typer.Option("flux2-klein", "--engine", "-e", help="Engine to preload"),
+) -> None:
+    """Start image generation daemon — keeps model warm in VRAM between requests."""
+    from imagecli.daemon import daemon_main
+
+    daemon_main(engine)
+
+
+@app.command()
 def engines():
     """List available image generation engines."""
     from imagecli.engine import list_engines
