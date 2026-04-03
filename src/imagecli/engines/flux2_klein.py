@@ -96,10 +96,23 @@ class Flux2KleinEngine(ImageEngine):
         torch.cuda.empty_cache()
         gc.collect()
 
+        import torch
+
         # Transformer (~3.9 GB FP8) + VAE (~0.17 GB) → ~4.1 GB on GPU
         self._pipe.transformer.to("cuda")
         self._pipe.vae.to("cuda")
-        self._optimize_pipe(self._pipe)
+        # Pipeline.device / _execution_device derives from the first registered module
+        # (text_encoder, on CPU). Monkey-patch the instance method to return cuda.
+        self._pipe._execution_device_override = torch.device("cuda")
+        orig_cls = type(self._pipe)
+        if not hasattr(orig_cls, "_orig_execution_device"):
+            orig_cls._orig_execution_device = orig_cls._execution_device
+            orig_cls._execution_device = property(
+                lambda pipe: getattr(pipe, "_execution_device_override", None)
+                or orig_cls._orig_execution_device.fget(pipe)
+            )
+        # Skip compile: torch.compile conflicts with QLinear.forward contiguity patch.
+        self._optimize_pipe(self._pipe, compile=False)
         logger.info("Generation phase ready (transformer + VAE on GPU, ~4 GB).")
 
     def generate_from_embeddings(
@@ -121,7 +134,7 @@ class Flux2KleinEngine(ImageEngine):
 
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
-        generator = torch.Generator("cuda").manual_seed(seed)
+        generator = torch.Generator("cpu").manual_seed(seed)
 
         pipe_kwargs = {
             "prompt_embeds": embeddings["prompt_embeds"].to("cuda"),
