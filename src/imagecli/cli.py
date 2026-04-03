@@ -249,6 +249,10 @@ def batch(
     no_compile: Annotated[
         bool, typer.Option("--no-compile", help="Skip torch.compile (faster startup, slower gen).")
     ] = False,
+    two_phase: Annotated[
+        bool,
+        typer.Option("--two-phase", help="Force 2-phase batch (encode all, then generate all). Uses less VRAM (~8 GB peak) but slower."),
+    ] = False,
 ):
     """Generate images for all .md files in a directory."""
     cfg = _load_config()
@@ -277,7 +281,11 @@ def batch(
         the_engine_name = engine_names.pop()
         the_engine = get_engine(the_engine_name, compile=not no_compile)
 
-        if the_engine.supports_two_phase:
+        if hasattr(the_engine, "load_all_on_gpu") and not two_phase:
+            successes, failures = _batch_all_on_gpu(
+                parsed, the_engine, the_engine_name, cfg, output_dir, console
+            )
+        elif the_engine.supports_two_phase:
             successes, failures = _batch_two_phase(
                 parsed, the_engine, the_engine_name, cfg, output_dir, no_compile, console
             )
@@ -295,6 +303,88 @@ def batch(
 
     console.rule()
     console.print(f"Done: [green]{successes} succeeded[/green], [red]{failures} failed[/red]")
+
+
+def _batch_all_on_gpu(parsed, engine, engine_name, cfg, output_dir, console):
+    """All-on-GPU batch: encoder + transformer + VAE all on GPU (~12 GB). No phase switching."""
+    from imagecli.engine import preflight_check
+
+    n_files = len(parsed)
+    successes, failures = 0, 0
+
+    try:
+        preflight_check(engine)
+
+        console.print(
+            f"\n[bold cyan]All-on-GPU batch:[/bold cyan] {n_files} images "
+            f"(encoder + transformer + VAE, ~12 GB)..."
+        )
+        engine.load_all_on_gpu()
+
+        for i, (f, doc, _) in enumerate(parsed):
+            console.rule(f"[bold]{i + 1}/{n_files}[/bold] — {f.name}")
+            try:
+                w = doc.width or cfg["width"]
+                h = doc.height or cfg["height"]
+                s = doc.steps or cfg["steps"]
+                g = doc.guidance or cfg["guidance"]
+                fmt = doc.format or cfg.get("format", "png")
+                out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
+
+                console.print(f"Engine: [bold cyan]{engine_name}[/bold cyan]")
+                console.print(f"Size: {w}×{h}  Steps: {s}  Guidance: {g}")
+                if doc.seed is not None:
+                    console.print(f"Seed: {doc.seed}")
+                console.print(f"Output → [green]{out_path}[/green]")
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Generating…", total=engine.effective_steps(s))
+
+                    def _step_callback(pipeline, step, timestep, callback_kwargs):
+                        progress.update(task, completed=step + 1)
+                        return callback_kwargs
+
+                    saved = engine.encode_and_generate(
+                        doc.prompt,
+                        width=w,
+                        height=h,
+                        steps=s,
+                        guidance=g,
+                        seed=doc.seed,
+                        output_path=out_path,
+                        callback=_step_callback,
+                    )
+
+                console.print(f"[bold green]Saved:[/bold green] {saved}")
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        peak_gb = torch.cuda.max_memory_reserved() / 1024**3
+                        console.print(f"Peak VRAM reserved (torch): [cyan]{peak_gb:.2f} GB[/cyan]")
+                except ImportError:
+                    pass
+
+                successes += 1
+                engine.clear_cache()
+
+            except Exception as e:
+                console.print(f"[red]FAILED:[/red] {e}")
+                failures += 1
+
+    finally:
+        engine.cleanup()
+
+    return successes, failures
 
 
 def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, console):

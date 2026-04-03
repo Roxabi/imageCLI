@@ -12,8 +12,8 @@ dependencies = [
     "sentencepiece>=0.2",
     "protobuf>=5.0",
     "Pillow>=10.0",
-    "torch>=2.7",
-    "torchvision>=0.20",
+    "torch>=2.11",
+    "torchvision>=0.22",
     "optimum[quanto]>=1.24",
     "tomli>=2.0; python_version < '3.11'",
     "gguf>=0.18.0",
@@ -37,19 +37,19 @@ target-version = "py312"
 line-length = 100
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu128" }]
-torchvision = [{ index = "pytorch-cu128" }]
+torch = [{ index = "pytorch-cu130" }]
+torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
 
 [tool.uv]
 override-dependencies = [
-    "torch>=2.7",
-    "torchvision>=0.20",
+    "torch>=2.11",
+    "torchvision>=0.22",
     # numpy<2 required by insightface (compiled against 1.x ABI)
     "numpy>=1.26,<2.0",
 ]
@@ -63,6 +63,12 @@ dev = [
     "pytest",
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
+]
+fp8 = [
+    "torchao>=0.9",
+]
+fp4 = [
+    "comfy-kitchen[cublas]>=0.2.7",
 ]
 pulid = [
     "insightface>=0.7.3",

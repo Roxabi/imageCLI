@@ -398,12 +398,16 @@ def _get_registry() -> dict[str, type[ImageEngine]]:
     from imagecli.engines.flux1_dev import Flux1DevEngine
     from imagecli.engines.flux1_schnell import Flux1SchnellEngine
     from imagecli.engines.flux2_klein import Flux2KleinEngine
+    from imagecli.engines.flux2_klein_fp4 import Flux2KleinFP4Engine
+    from imagecli.engines.flux2_klein_fp8 import Flux2KleinFP8Engine
     from imagecli.engines.pulid_flux1_dev import PuLIDFlux1DevEngine
     from imagecli.engines.pulid_flux2_klein import PuLIDFlux2KleinEngine
     from imagecli.engines.sd35 import SD35Engine
 
     return {
         "flux2-klein": Flux2KleinEngine,
+        "flux2-klein-fp8": Flux2KleinFP8Engine,
+        "flux2-klein-fp4": Flux2KleinFP4Engine,
         "pulid-flux2-klein": PuLIDFlux2KleinEngine,
         "flux1-dev": Flux1DevEngine,
         "pulid-flux1-dev": PuLIDFlux1DevEngine,
