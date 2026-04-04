@@ -54,10 +54,18 @@ class ImageEngine(ABC):
     vram_gb: float  # approximate minimum VRAM
     capabilities: ClassVar[EngineCapabilities] = EngineCapabilities()
 
-    def __init__(self, *, compile: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        compile: bool = True,
+        lora_path: str | None = None,
+        lora_scale: float = 1.0,
+    ) -> None:
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
+        self.lora_path = lora_path
+        self.lora_scale = lora_scale
 
     @abstractmethod
     def _load(self) -> None:
@@ -416,12 +424,18 @@ def _get_registry() -> dict[str, type[ImageEngine]]:
     }
 
 
-def get_engine(name: str, *, compile: bool = True) -> ImageEngine:
+def get_engine(
+    name: str,
+    *,
+    compile: bool = True,
+    lora_path: str | None = None,
+    lora_scale: float = 1.0,
+) -> ImageEngine:
     registry = _get_registry()
     if name not in registry:
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
-    return registry[name](compile=compile)
+    return registry[name](compile=compile, lora_path=lora_path, lora_scale=lora_scale)
 
 
 def list_engines() -> list[dict]:

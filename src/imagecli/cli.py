@@ -71,10 +71,14 @@ def _run_generate(
     guidance_explicit: bool = False,
     face_image: str | None = None,
     pulid_strength: float = 0.6,
+    lora_path: str | None = None,
+    lora_scale: float = 1.0,
 ):
     from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
-    engine: ImageEngine = engine_instance or get_engine(engine_name, compile=compile)
+    engine: ImageEngine = engine_instance or get_engine(
+        engine_name, compile=compile, lora_path=lora_path, lora_scale=lora_scale,
+    )
 
     preflight_check(engine)
     warn_ignored_params(
@@ -168,6 +172,14 @@ def generate(
         Optional[float],
         typer.Option("--pulid-strength", help="PuLID identity lock strength (default 0.6)."),
     ] = None,
+    lora: Annotated[
+        Optional[str],
+        typer.Option("--lora", help="Path to LoRA weights (.safetensors). Loaded before quantization."),
+    ] = None,
+    lora_scale: Annotated[
+        Optional[float],
+        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
+    ] = None,
     no_compile: Annotated[
         bool, typer.Option("--no-compile", help="Skip torch.compile (faster startup, slower gen).")
     ] = False,
@@ -198,6 +210,8 @@ def generate(
             doc.face_image, path.parent
         )
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
+        lora_p = lora or doc.lora_path
+        lora_s = lora_scale if lora_scale is not None else doc.lora_scale
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -214,6 +228,8 @@ def generate(
         guidance_explicit = guidance is not None
         face_img = _resolve_face_image(face_image, Path.cwd())
         pulid_str = pulid_strength if pulid_strength is not None else 0.6
+        lora_p = lora
+        lora_s = lora_scale if lora_scale is not None else 1.0
 
     if output:
         out_path = Path(output)
@@ -238,6 +254,8 @@ def generate(
         guidance_explicit=guidance_explicit,
         face_image=face_img,
         pulid_strength=pulid_str,
+        lora_path=lora_p,
+        lora_scale=lora_s,
     )
 
 
@@ -253,6 +271,18 @@ def batch(
         bool,
         typer.Option("--two-phase", help="Force 2-phase batch (encode all, then generate all). Uses less VRAM (~8 GB peak) but slower."),
     ] = False,
+    steps: Annotated[
+        Optional[int],
+        typer.Option("--steps", "-s", help="Override inference steps for all prompts."),
+    ] = None,
+    lora: Annotated[
+        Optional[str],
+        typer.Option("--lora", help="Path to LoRA weights (.safetensors). Loaded before quantization."),
+    ] = None,
+    lora_scale: Annotated[
+        Optional[float],
+        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
+    ] = None,
 ):
     """Generate images for all .md files in a directory."""
     cfg = _load_config()
@@ -279,15 +309,24 @@ def batch(
 
     if single_engine:
         the_engine_name = engine_names.pop()
-        the_engine = get_engine(the_engine_name, compile=not no_compile)
+        # Resolve LoRA: CLI flag overrides frontmatter. For batch, use first file's
+        # frontmatter as fallback (all files share the same engine/LoRA in single-engine mode).
+        batch_lora = lora or parsed[0][1].lora_path
+        batch_lora_scale = lora_scale if lora_scale is not None else parsed[0][1].lora_scale
+        the_engine = get_engine(
+            the_engine_name, compile=not no_compile,
+            lora_path=batch_lora, lora_scale=batch_lora_scale,
+        )
 
         if hasattr(the_engine, "load_all_on_gpu") and not two_phase:
             successes, failures = _batch_all_on_gpu(
-                parsed, the_engine, the_engine_name, cfg, output_dir, console
+                parsed, the_engine, the_engine_name, cfg, output_dir, console,
+                steps_override=steps,
             )
         elif the_engine.supports_two_phase:
             successes, failures = _batch_two_phase(
-                parsed, the_engine, the_engine_name, cfg, output_dir, no_compile, console
+                parsed, the_engine, the_engine_name, cfg, output_dir, no_compile, console,
+                steps_override=steps,
             )
         else:
             successes, failures = _batch_sequential(
@@ -297,15 +336,19 @@ def batch(
                 no_compile,
                 console,
                 initial_engine=(the_engine, the_engine_name),
+                steps_override=steps,
             )
     else:
-        successes, failures = _batch_sequential(parsed, cfg, output_dir, no_compile, console)
+        successes, failures = _batch_sequential(
+            parsed, cfg, output_dir, no_compile, console, steps_override=steps,
+            lora_override=lora, lora_scale_override=lora_scale,
+        )
 
     console.rule()
     console.print(f"Done: [green]{successes} succeeded[/green], [red]{failures} failed[/red]")
 
 
-def _batch_all_on_gpu(parsed, engine, engine_name, cfg, output_dir, console):
+def _batch_all_on_gpu(parsed, engine, engine_name, cfg, output_dir, console, steps_override=None):
     """All-on-GPU batch: encoder + transformer + VAE all on GPU (~12 GB). No phase switching."""
     from imagecli.engine import preflight_check
 
@@ -326,7 +369,7 @@ def _batch_all_on_gpu(parsed, engine, engine_name, cfg, output_dir, console):
             try:
                 w = doc.width or cfg["width"]
                 h = doc.height or cfg["height"]
-                s = doc.steps or cfg["steps"]
+                s = steps_override or doc.steps or cfg["steps"]
                 g = doc.guidance or cfg["guidance"]
                 fmt = doc.format or cfg.get("format", "png")
                 out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
@@ -387,7 +430,7 @@ def _batch_all_on_gpu(parsed, engine, engine_name, cfg, output_dir, console):
     return successes, failures
 
 
-def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, console):
+def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, console, steps_override=None):
     """2-phase batch: encode all prompts, then generate all images."""
     from imagecli.engine import preflight_check
 
@@ -426,7 +469,7 @@ def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, c
             try:
                 w = doc.width or cfg["width"]
                 h = doc.height or cfg["height"]
-                s = doc.steps or cfg["steps"]
+                s = steps_override or doc.steps or cfg["steps"]
                 g = doc.guidance or cfg["guidance"]
                 fmt = doc.format or cfg.get("format", "png")
                 out_path = _resolve_output(cfg, f.stem, fmt, output_dir)
@@ -487,7 +530,7 @@ def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, c
     return successes, failures
 
 
-def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engine=None):
+def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engine=None, steps_override=None, lora_override=None, lora_scale_override=None):
     """Standard sequential batch: one engine at a time, CPU offload per image."""
     from imagecli.engine import ImageEngine, get_engine
 
@@ -513,12 +556,16 @@ def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engi
                 current_engine_name = None
 
             if current_engine is None:
-                current_engine = get_engine(engine_name, compile=not no_compile)
+                current_engine = get_engine(
+                    engine_name, compile=not no_compile,
+                    lora_path=lora_override or doc.lora_path,
+                    lora_scale=lora_scale_override if lora_scale_override is not None else doc.lora_scale,
+                )
                 current_engine_name = engine_name
 
             w = doc.width or cfg["width"]
             h = doc.height or cfg["height"]
-            s = doc.steps or cfg["steps"]
+            s = steps_override or doc.steps or cfg["steps"]
             g = doc.guidance or cfg["guidance"]
             fmt = doc.format or cfg.get("format", "png")
             out_path = _resolve_output(cfg, f.stem, fmt, output_dir)

@@ -53,6 +53,17 @@ class Flux2KleinFP8Engine(ImageEngine):
             BASE_REPO,
             torch_dtype=torch.bfloat16,
         )
+        # LoRA must be loaded BEFORE quantization — weights are fused into bf16 base,
+        # then quantized together. Loading after quantization silently has no effect.
+        if self.lora_path:
+            logger.info("Loading LoRA from %s...", self.lora_path)
+            self._pipe.load_lora_weights(self.lora_path)
+            if self.lora_scale != 1.0:
+                self._pipe.set_adapters(["default_0"], adapter_weights=[self.lora_scale])
+                logger.info("LoRA adapter scale set to %.2f", self.lora_scale)
+            self._pipe.fuse_lora()
+            self._pipe.unload_lora_weights()
+            logger.info("LoRA fused into base weights.")
 
         # Quantize transformer to FP8 via torchao (weight-only, no QLinear patch needed)
         logger.info("Quantizing transformer to FP8 via torchao...")

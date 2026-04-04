@@ -201,6 +201,8 @@ imagecli generate "prompt" -n "blurry, ugly"         # negative prompt
 imagecli generate "prompt" -o my_image.png           # explicit output path
 imagecli generate "prompt" --output-dir ./out        # custom output directory
 imagecli generate "prompt" --no-compile              # skip torch.compile for one-offs
+imagecli generate "prompt" --lora ./lora.safetensors               # LoRA weights
+imagecli generate "prompt" --lora ./lora.safetensors --lora-scale 1.5  # boosted LoRA
 ```
 
 | Flag | Short | Description | Default |
@@ -216,6 +218,8 @@ imagecli generate "prompt" --no-compile              # skip torch.compile for on
 | `--output-dir` | | Output directory | `images/images_out` |
 | `--format` | | Output format: `png`, `jpg`, `webp` | `png` |
 | `--no-compile` | | Skip torch.compile (faster startup, slower generation) | off |
+| `--lora` | | Path to LoRA weights (`.safetensors`). `flux2-klein` and `flux2-klein-fp8` only. | none |
+| `--lora-scale` | | LoRA adapter scale | `1.0` |
 
 ### `batch` — All prompts in a directory
 
@@ -224,6 +228,7 @@ imagecli batch images/prompts_in/
 imagecli batch images/prompts_in/ -e flux1-dev
 imagecli batch images/prompts_in/ --output-dir ./results
 imagecli batch images/prompts_in/ --no-compile
+imagecli batch images/prompts_in/ --lora ./lora.safetensors       # LoRA for all images
 ```
 
 Processes every `.md` file in the directory in sorted order.
@@ -239,6 +244,8 @@ Processes every `.md` file in the directory in sorted order.
 | `--output-dir` | | Output directory for all images | `images/images_out` |
 | `--no-compile` | | Skip torch.compile | off |
 | `--two-phase` | | Force 2-phase batch (lower VRAM, slower) | off |
+| `--lora` | | Path to LoRA weights (`.safetensors`). `flux2-klein` and `flux2-klein-fp8` only. | none |
+| `--lora-scale` | | LoRA adapter scale | `1.0` |
 
 ### `engines` — List engines
 
@@ -272,6 +279,8 @@ negative_prompt: "blurry, low quality, watermark"
 format: png                  # png | jpg | webp
 face_image: /path/to/ref.png # pulid engines only — reference face (abs or relative to .md)
 pulid_strength: 0.6          # pulid engines only — identity lock strength (default 0.6, 0.8 for flux1-dev)
+lora_path: /path/to/lora.safetensors  # LoRA weights — flux2-klein and flux2-klein-fp8 only
+lora_scale: 1.0              # LoRA adapter scale (default 1.0, try 1.5 for stronger identity)
 ---
 
 Your prompt text here. Can span multiple paragraphs.

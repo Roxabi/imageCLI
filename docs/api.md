@@ -93,6 +93,8 @@ def generate(
     output_dir: str | Path | None = None,
     format: str | None = None,
     compile: bool = True,
+    lora_path: str | Path | None = None,
+    lora_scale: float = 1.0,
 ) -> Path
 ```
 
@@ -118,6 +120,8 @@ Hardcoded defaults when no config file is found: `engine="flux2-klein"`, `width=
 | `output_dir` | `str \| Path \| None` | Directory to save the image in. Filename is auto-generated as `image.{format}`, with `_1`, `_2`, etc. appended if the file already exists. |
 | `format` | `str \| None` | Output format: `png`, `jpg`, or `webp`. |
 | `compile` | `bool` | Enable `torch.compile` on the model transformer (default `True`). Set to `False` for faster startup at the cost of slower inference. |
+| `lora_path` | `str \| Path \| None` | Path to LoRA weights (`.safetensors`). Supported by `flux2-klein` and `flux2-klein-fp8`. Fused into base weights before quantization. |
+| `lora_scale` | `float` | LoRA adapter scale (default `1.0`). Higher values strengthen the LoRA effect. |
 
 **Behavior:**
 

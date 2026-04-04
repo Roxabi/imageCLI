@@ -29,6 +29,8 @@ class PromptDoc:
     format: str | None = None
     face_image: str | None = None
     pulid_strength: float = 0.6
+    lora_path: str | None = None
+    lora_scale: float = 1.0
     extra: dict = field(default_factory=dict)
 
 
@@ -66,6 +68,8 @@ def parse_prompt_file(path: Path) -> PromptDoc:
         format=frontmatter.pop("format", None),
         face_image=frontmatter.pop("face_image", None),
         pulid_strength=_float(frontmatter.pop("pulid_strength", None)) or 0.6,
+        lora_path=frontmatter.pop("lora_path", None),
+        lora_scale=_float(frontmatter.pop("lora_scale", None)) or 1.0,
         extra=frontmatter,
     )
 

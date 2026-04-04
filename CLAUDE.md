@@ -65,6 +65,8 @@ imagecli generate "prompt" -n "blurry, ugly"     # negative prompt
 imagecli generate "prompt" -o my_image.png       # custom output path
 imagecli generate "prompt" --output-dir ./out    # custom output dir
 imagecli generate "prompt" --no-compile          # skip torch.compile (faster startup)
+imagecli generate "prompt" --lora ./lora.safetensors              # LoRA weights
+imagecli generate "prompt" --lora ./lora.safetensors --lora-scale 1.5  # boosted
 
 # Batch generation (all .md files in a directory)
 imagecli batch images/prompts_in/
@@ -72,6 +74,7 @@ imagecli batch images/prompts_in/ -e flux1-dev
 imagecli batch images/prompts_in/ --output-dir ./results
 imagecli batch images/prompts_in/ --no-compile
 imagecli batch images/prompts_in/ --two-phase   # force 2-phase (lower VRAM)
+imagecli batch images/prompts_in/ --lora ./lora.safetensors       # LoRA for all images
 
 # Info
 imagecli engines     # list engines with VRAM requirements
@@ -92,6 +95,8 @@ negative_prompt: "blurry"    # what to avoid
 format: png                  # png | jpg | webp
 face_image: /path/to/ref.png # pulid-flux2-klein only — reference face (abs or relative to .md file)
 pulid_strength: 0.6          # pulid-flux2-klein only — identity lock strength (default 0.6)
+lora_path: /path/to/lora.safetensors  # LoRA weights (flux2-klein, flux2-klein-fp8 only)
+lora_scale: 1.0              # LoRA adapter scale (default 1.0, try 1.5 for stronger identity)
 ---
 
 Your prompt text here. Can be multiple paragraphs.
@@ -247,6 +252,14 @@ Multi-image per step (batch_size 2-4): zero speedup at 512x512 — GPU already c
 - **torchao FP8 is 40% slower** — weight-only FP8 dequantizes to bf16 per matmul
 - **--two-phase is free** — same speed as all-on-GPU, just lower VRAM during generation
 - **torch.compile is a dead end** — quanto's QLinear patch blocks it; torchao unblocks it but is already slower
+
+## LoRA
+
+LoRA training uses [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit/) externally. LoRA inference is supported on `flux2-klein` and `flux2-klein-fp8` via `--lora` flag or `lora_path` frontmatter. LoRA weights are fused into base weights before FP8 quantization.
+
+**Reference:** `docs/lora.md` — training config, load order details, tuning levers.
+
+**Supported engines:** `flux2-klein` (quanto FP8), `flux2-klein-fp8` (torchao FP8). FP4 (pre-quantized weights) is not supported.
 
 ## Conventions
 

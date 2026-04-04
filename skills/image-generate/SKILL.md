@@ -23,6 +23,7 @@ Generate images using imageCLI on the local GPU. This skill selects the right en
 | Photorealistic subjects | `sd35` | CFG-free, strong on realistic photos |
 | Face-locked images (recommended) | `pulid-flux1-dev` | Clean face lock, no banding, 1024x1024 |
 | Face-locked images (Klein quality) | `pulid-flux2-klein` | Klein texture + face lock via dim projection |
+| LoRA-based identity | `flux2-klein` + `--lora` | Pre-trained LoRA, no PuLID deps, natural texture |
 
 ### Performance: Single vs Batch
 
@@ -53,7 +54,8 @@ What would you like to generate?
 ## Phase 2 — Select Engine
 
 Based on Phase 1:
-- Face lock requested -> `pulid-flux1-dev` (or `pulid-flux2-klein` if user prefers Klein texture)
+- Face lock requested (reference image) -> `pulid-flux1-dev` (or `pulid-flux2-klein` if user prefers Klein texture)
+- Face lock requested (trained LoRA) -> `flux2-klein --lora path/to/lora.safetensors`
 - Batch of 3+ without face lock -> `flux2-klein` (2-phase kicks in automatically)
 - Quick draft -> `flux1-schnell`
 - Complex detailed prompt -> `flux1-dev`
@@ -87,10 +89,16 @@ Detailed prompt text here. Can span multiple paragraphs.
 Use vivid, specific language. Describe lighting, composition, style.
 ```
 
-For face-locked images, add:
+For face-locked images (PuLID), add:
 ```yaml
 face_image: /absolute/path/to/reference.png
 pulid_strength: 0.6    # 0.4-0.8, higher = stronger face lock
+```
+
+For LoRA-based identity (flux2-klein, flux2-klein-fp8), add:
+```yaml
+lora_path: /path/to/lora.safetensors
+lora_scale: 1.0    # try 1.5 for stronger identity
 ```
 
 Then generate:
@@ -136,6 +144,7 @@ Execute the command. After generation:
 - **VRAM errors:** Close other GPU processes (ollama, ComfyUI). Run `nvidia-smi` to check.
 - **Model not found:** First run downloads models from HuggingFace (~13 GB for Klein). Ensure `HF_TOKEN` is set for gated models.
 - **PuLID engines fail:** Need `uv sync --extra pulid` and model weights at `~/ComfyUI/models/pulid/`.
+- **LoRA has no effect:** LoRA only works on `flux2-klein` and `flux2-klein-fp8`. Not supported on `flux2-klein-fp4` (pre-quantized weights).
 
 ## Quick Reference
 
@@ -152,6 +161,10 @@ uv run imagecli generate prompt.md                   # from file
 # Batch
 uv run imagecli batch prompts_dir/ -e flux2-klein
 uv run imagecli batch prompts_dir/ --no-compile      # skip compile for small batches
+
+# LoRA generation
+uv run imagecli generate "lyraface person smiling" --lora ./lora.safetensors
+uv run imagecli batch prompts_dir/ --lora ./lora.safetensors --lora-scale 1.5
 ```
 
 All commands must be run from `~/projects/imageCLI` (or wherever imageCLI is installed).
