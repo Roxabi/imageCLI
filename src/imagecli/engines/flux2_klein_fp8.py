@@ -65,6 +65,11 @@ class Flux2KleinFP8Engine(ImageEngine):
             self._pipe.unload_lora_weights()
             logger.info("LoRA fused into base weights.")
 
+        # Pivotal tuning: load trained trigger vectors into the TE BEFORE
+        # transformer quantization. TE stays bf16 in torchao's weight-only FP8
+        # quantization — only nn.Linear layers are touched.
+        self._apply_pivotal_embeddings()
+
         # Quantize transformer to FP8 via torchao (weight-only, no QLinear patch needed)
         logger.info("Quantizing transformer to FP8 via torchao...")
         quantize_(self._pipe.transformer, Float8WeightOnlyConfig())

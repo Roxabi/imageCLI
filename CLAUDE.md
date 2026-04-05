@@ -95,8 +95,10 @@ negative_prompt: "blurry"    # what to avoid
 format: png                  # png | jpg | webp
 face_image: /path/to/ref.png # pulid-flux2-klein only — reference face (abs or relative to .md file)
 pulid_strength: 0.6          # pulid-flux2-klein only — identity lock strength (default 0.6)
-lora_path: /path/to/lora.safetensors  # LoRA weights (flux2-klein, flux2-klein-fp8 only)
+lora_path: /path/to/lora.safetensors  # LoRA weights (flux2-klein, flux2-klein-fp4, flux2-klein-fp8)
 lora_scale: 1.0              # LoRA adapter scale (default 1.0, try 1.5 for stronger identity)
+trigger: lyraface            # pivotal tuning trigger word (required when LoRA contains emb_params)
+embedding_path: /path/to/emb.safetensors  # standalone pivotal embedding (optional; overrides emb_params in LoRA)
 ---
 
 Your prompt text here. Can be multiple paragraphs.

@@ -60,12 +60,16 @@ class ImageEngine(ABC):
         compile: bool = True,
         lora_path: str | None = None,
         lora_scale: float = 1.0,
+        trigger: str | None = None,
+        embedding_path: str | None = None,
     ) -> None:
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
         self.lora_path = lora_path
         self.lora_scale = lora_scale
+        self.trigger = trigger
+        self.embedding_path = embedding_path
 
     @abstractmethod
     def _load(self) -> None:
@@ -315,6 +319,41 @@ class ImageEngine(ABC):
             torch.cuda.empty_cache()
         gc.collect()
 
+    def _apply_pivotal_embeddings(self) -> None:
+        """Load and apply pivotal tuning embeddings onto ``self._pipe``.
+
+        No-op when neither ``lora_path`` nor ``embedding_path`` is set. Must be
+        called AFTER the LoRA has been fused/unloaded (if any) and BEFORE the
+        transformer is quantized or moved to GPU — the TE should still be on
+        CPU in bf16, and the transformer's nn.Linear layers should still be
+        unquantized (the pivotal path touches nn.Embedding in the TE only, so
+        this is safe, but the ordering keeps all write-mutations in a single
+        bf16 phase).
+
+        Hook point for flux2-klein (quanto), flux2-klein-fp4 (NVFP4 runtime
+        quantize), and flux2-klein-fp8 (torchao). Other engine families that
+        do not inherit the LoRA+pivotal surface simply never call this.
+        """
+        if not (self.lora_path or self.embedding_path):
+            return
+        # Local imports to keep torch/safetensors out of the base class import
+        # path for engines that do not use pivotal tuning.
+        from imagecli.pivotal import (
+            _patch_encode_prompt,
+            apply_pivotal_to_pipe,
+            load_pivotal_embedding,
+        )
+
+        pivotal = load_pivotal_embedding(
+            self.lora_path,
+            self.trigger,
+            embedding_path=self.embedding_path,
+            te_hidden_size=self._pipe.text_encoder.config.hidden_size,
+        )
+        if pivotal is not None:
+            apply_pivotal_to_pipe(self._pipe, pivotal)
+            _patch_encode_prompt(self._pipe)
+
 
 def preflight_check(engine: ImageEngine) -> None:
     """Abort early if the system can't safely run this engine. Skipped if already loaded."""
@@ -430,12 +469,20 @@ def get_engine(
     compile: bool = True,
     lora_path: str | None = None,
     lora_scale: float = 1.0,
+    trigger: str | None = None,
+    embedding_path: str | None = None,
 ) -> ImageEngine:
     registry = _get_registry()
     if name not in registry:
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
-    return registry[name](compile=compile, lora_path=lora_path, lora_scale=lora_scale)
+    return registry[name](
+        compile=compile,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+        trigger=trigger,
+        embedding_path=embedding_path,
+    )
 
 
 def list_engines() -> list[dict]:

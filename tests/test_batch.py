@@ -74,7 +74,12 @@ def test_batch_no_compile(mock_get_engine, mock_run, tmp_path: Path):
     result = runner.invoke(app, ["batch", str(tmp_path), "--no-compile"])
     assert result.exit_code == 0
     mock_get_engine.assert_called_once_with(
-        "flux2-klein", compile=False, lora_path=None, lora_scale=1.0,
+        "flux2-klein",
+        compile=False,
+        lora_path=None,
+        lora_scale=1.0,
+        trigger=None,
+        embedding_path=None,
     )
 
 
@@ -121,7 +126,12 @@ def test_batch_engine_override(mock_get_engine, mock_run, tmp_path: Path):
     result = runner.invoke(app, ["batch", str(tmp_path), "-e", "sd35"])
     assert result.exit_code == 0
     mock_get_engine.assert_called_once_with(
-        "sd35", compile=True, lora_path=None, lora_scale=1.0,
+        "sd35",
+        compile=True,
+        lora_path=None,
+        lora_scale=1.0,
+        trigger=None,
+        embedding_path=None,
     )
 
 

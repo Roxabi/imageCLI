@@ -31,6 +31,8 @@ class PromptDoc:
     pulid_strength: float = 0.6
     lora_path: str | None = None
     lora_scale: float = 1.0
+    trigger: str | None = None
+    embedding_path: str | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -70,6 +72,8 @@ def parse_prompt_file(path: Path) -> PromptDoc:
         pulid_strength=_float(frontmatter.pop("pulid_strength", None)) or 0.6,
         lora_path=frontmatter.pop("lora_path", None),
         lora_scale=_float(frontmatter.pop("lora_scale", None)) or 1.0,
+        trigger=frontmatter.pop("trigger", None),
+        embedding_path=frontmatter.pop("embedding_path", None),
         extra=frontmatter,
     )
 

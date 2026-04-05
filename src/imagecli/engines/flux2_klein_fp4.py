@@ -330,11 +330,22 @@ class Flux2KleinFP4Engine(ImageEngine):
             self._pipe.unload_lora_weights()
             logger.info("LoRA fused into bf16 base weights.")
 
+            # Pivotal tuning: load trigger embeddings into the TE BEFORE moving
+            # the transformer to GPU. TE is still on CPU in bf16 — disjoint from
+            # runtime NVFP4 quantization (which only touches nn.Linear layers
+            # in the transformer, not nn.Embedding in the TE).
+            self._apply_pivotal_embeddings()
+
             self._pipe.transformer.to("cuda")
             logger.info("Runtime-quantizing fused transformer to NVFP4...")
             patched = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)
             logger.info("Runtime-quantized %d linear layers to NVFP4.", patched)
         else:
+            # Pivotal-only path: standalone embedding file without a LoRA.
+            # Must happen before transformer.to("cuda") below, same rationale
+            # as the LoRA branch.
+            self._apply_pivotal_embeddings()
+
             # No LoRA: use pre-quantized BFL NVFP4 weights from the hub.
             logger.info("Downloading NVFP4 weights from %s...", NVFP4_REPO)
             nvfp4_path = hf_hub_download(repo_id=NVFP4_REPO, filename=NVFP4_FILENAME)
