@@ -330,11 +330,21 @@ class Flux2KleinFP4Engine(ImageEngine):
             self._pipe.unload_lora_weights()
             logger.info("LoRA fused into bf16 base weights.")
 
+            # Pivotal tuning: load trigger embeddings into the TE BEFORE moving
+            # the transformer to GPU. TE is still on CPU in bf16 — disjoint from
+            # runtime NVFP4 quantization (which only touches nn.Linear layers
+            # in the transformer, not nn.Embedding in the TE).
+            self._apply_pivotal_if_needed()
+
             self._pipe.transformer.to("cuda")
             logger.info("Runtime-quantizing fused transformer to NVFP4...")
             patched = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)
             logger.info("Runtime-quantized %d linear layers to NVFP4.", patched)
         else:
+            # Pivotal-only path: standalone embedding file without a LoRA.
+            if self.embedding_path:
+                self._apply_pivotal_if_needed()
+
             # No LoRA: use pre-quantized BFL NVFP4 weights from the hub.
             logger.info("Downloading NVFP4 weights from %s...", NVFP4_REPO)
             nvfp4_path = hf_hub_download(repo_id=NVFP4_REPO, filename=NVFP4_FILENAME)
@@ -343,6 +353,26 @@ class Flux2KleinFP4Engine(ImageEngine):
             logger.info("Patching transformer with NVFP4 QuantizedTensors...")
             patched = _patch_transformer_nvfp4(self._pipe.transformer, nvfp4_path)
             logger.info("Patched %d linear layers with NVFP4 weights.", patched)
+
+    def _apply_pivotal_if_needed(self):
+        """Load pivotal embeddings into the TE if a trigger/embedding is set."""
+        if not (self.lora_path or self.embedding_path):
+            return
+        from imagecli.pivotal import (
+            _patch_encode_prompt,
+            apply_pivotal_to_pipe,
+            load_pivotal_embedding,
+        )
+
+        pivotal = load_pivotal_embedding(
+            self.lora_path,
+            self.trigger,
+            embedding_path=self.embedding_path,
+            te_hidden_size=self._pipe.text_encoder.config.hidden_size,
+        )
+        if pivotal is not None:
+            apply_pivotal_to_pipe(self._pipe, pivotal)
+            _patch_encode_prompt(self._pipe)
 
     def _set_execution_device(self):
         import torch

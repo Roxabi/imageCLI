@@ -60,12 +60,16 @@ class ImageEngine(ABC):
         compile: bool = True,
         lora_path: str | None = None,
         lora_scale: float = 1.0,
+        trigger: str | None = None,
+        embedding_path: str | None = None,
     ) -> None:
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
         self.lora_path = lora_path
         self.lora_scale = lora_scale
+        self.trigger = trigger
+        self.embedding_path = embedding_path
 
     @abstractmethod
     def _load(self) -> None:
@@ -430,12 +434,20 @@ def get_engine(
     compile: bool = True,
     lora_path: str | None = None,
     lora_scale: float = 1.0,
+    trigger: str | None = None,
+    embedding_path: str | None = None,
 ) -> ImageEngine:
     registry = _get_registry()
     if name not in registry:
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
-    return registry[name](compile=compile, lora_path=lora_path, lora_scale=lora_scale)
+    return registry[name](
+        compile=compile,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+        trigger=trigger,
+        embedding_path=embedding_path,
+    )
 
 
 def list_engines() -> list[dict]:

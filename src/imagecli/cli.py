@@ -73,11 +73,18 @@ def _run_generate(
     pulid_strength: float = 0.6,
     lora_path: str | None = None,
     lora_scale: float = 1.0,
+    trigger: str | None = None,
+    embedding_path: str | None = None,
 ):
     from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
     engine: ImageEngine = engine_instance or get_engine(
-        engine_name, compile=compile, lora_path=lora_path, lora_scale=lora_scale,
+        engine_name,
+        compile=compile,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+        trigger=trigger,
+        embedding_path=embedding_path,
     )
 
     preflight_check(engine)
@@ -180,6 +187,20 @@ def generate(
         Optional[float],
         typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
     ] = None,
+    trigger: Annotated[
+        Optional[str],
+        typer.Option(
+            "--trigger",
+            help="Pivotal tuning trigger word. Required when the LoRA contains emb_params.",
+        ),
+    ] = None,
+    embedding: Annotated[
+        Optional[str],
+        typer.Option(
+            "--embedding",
+            help="Path to a standalone pivotal embedding (.safetensors). Overrides emb_params in the LoRA.",
+        ),
+    ] = None,
     no_compile: Annotated[
         bool, typer.Option("--no-compile", help="Skip torch.compile (faster startup, slower gen).")
     ] = False,
@@ -212,6 +233,8 @@ def generate(
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
         lora_p = lora or doc.lora_path
         lora_s = lora_scale if lora_scale is not None else doc.lora_scale
+        trig = trigger or doc.trigger
+        emb_p = embedding or doc.embedding_path
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -230,6 +253,8 @@ def generate(
         pulid_str = pulid_strength if pulid_strength is not None else 0.6
         lora_p = lora
         lora_s = lora_scale if lora_scale is not None else 1.0
+        trig = trigger
+        emb_p = embedding
 
     if output:
         out_path = Path(output)
@@ -256,6 +281,8 @@ def generate(
         pulid_strength=pulid_str,
         lora_path=lora_p,
         lora_scale=lora_s,
+        trigger=trig,
+        embedding_path=emb_p,
     )
 
 
@@ -283,6 +310,20 @@ def batch(
         Optional[float],
         typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
     ] = None,
+    trigger: Annotated[
+        Optional[str],
+        typer.Option(
+            "--trigger",
+            help="Pivotal tuning trigger word. Required when the LoRA contains emb_params.",
+        ),
+    ] = None,
+    embedding: Annotated[
+        Optional[str],
+        typer.Option(
+            "--embedding",
+            help="Path to a standalone pivotal embedding (.safetensors). Overrides emb_params in the LoRA.",
+        ),
+    ] = None,
 ):
     """Generate images for all .md files in a directory."""
     cfg = _load_config()
@@ -309,13 +350,17 @@ def batch(
 
     if single_engine:
         the_engine_name = engine_names.pop()
-        # Resolve LoRA: CLI flag overrides frontmatter. For batch, use first file's
-        # frontmatter as fallback (all files share the same engine/LoRA in single-engine mode).
+        # Resolve LoRA + pivotal: CLI flag overrides frontmatter. For batch, use
+        # first file's frontmatter as fallback (all files share the same engine/
+        # LoRA in single-engine mode).
         batch_lora = lora or parsed[0][1].lora_path
         batch_lora_scale = lora_scale if lora_scale is not None else parsed[0][1].lora_scale
+        batch_trigger = trigger or parsed[0][1].trigger
+        batch_embedding = embedding or parsed[0][1].embedding_path
         the_engine = get_engine(
             the_engine_name, compile=not no_compile,
             lora_path=batch_lora, lora_scale=batch_lora_scale,
+            trigger=batch_trigger, embedding_path=batch_embedding,
         )
 
         if hasattr(the_engine, "load_all_on_gpu") and not two_phase:
@@ -342,6 +387,7 @@ def batch(
         successes, failures = _batch_sequential(
             parsed, cfg, output_dir, no_compile, console, steps_override=steps,
             lora_override=lora, lora_scale_override=lora_scale,
+            trigger_override=trigger, embedding_override=embedding,
         )
 
     console.rule()
@@ -530,7 +576,19 @@ def _batch_two_phase(parsed, engine, engine_name, cfg, output_dir, no_compile, c
     return successes, failures
 
 
-def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engine=None, steps_override=None, lora_override=None, lora_scale_override=None):
+def _batch_sequential(
+    parsed,
+    cfg,
+    output_dir,
+    no_compile,
+    console,
+    initial_engine=None,
+    steps_override=None,
+    lora_override=None,
+    lora_scale_override=None,
+    trigger_override=None,
+    embedding_override=None,
+):
     """Standard sequential batch: one engine at a time, CPU offload per image."""
     from imagecli.engine import ImageEngine, get_engine
 
@@ -560,6 +618,8 @@ def _batch_sequential(parsed, cfg, output_dir, no_compile, console, initial_engi
                     engine_name, compile=not no_compile,
                     lora_path=lora_override or doc.lora_path,
                     lora_scale=lora_scale_override if lora_scale_override is not None else doc.lora_scale,
+                    trigger=trigger_override or doc.trigger,
+                    embedding_path=embedding_override or doc.embedding_path,
                 )
                 current_engine_name = engine_name
 

@@ -56,7 +56,7 @@ Other viable tools: diffusers `train_dreambooth_lora_flux2_klein.py`, SimpleTune
 
 ## LoRA Inference
 
-Supported on `flux2-klein` and `flux2-klein-fp8`. Not supported on `flux2-klein-fp4` (pre-quantized weights).
+Supported on `flux2-klein`, `flux2-klein-fp8`, and `flux2-klein-fp4` (via runtime NVFP4 quantization of the fused bf16 base).
 
 ### Usage
 
@@ -117,6 +117,81 @@ The LoRA competes with the prompt for control of the output. At rank 16:
 | **training steps** | Training | Stronger lock, but overfitting risk |
 | **adapter_weights** | Inference | Boost LoRA scale without retraining |
 | **inference steps** | Inference | Better quality, diminishing returns past 20 |
+
+---
+
+## Pivotal Tuning Inference
+
+When ai-toolkit is configured with both a `network:` (LoRA) block AND an `embedding:` (pivotal tuning) block, it trains N placeholder token embeddings alongside the transformer LoRA. Those embeddings tighten the trigger-word semantics in the text encoder — the 16 GB-feasible alternative to full TE training, which OOMs on Klein 4B's Qwen3 TE.
+
+**imageCLI supports pivotal tuning inference on `flux2-klein`, `flux2-klein-fp4`, and `flux2-klein-fp8`.**
+
+### Why it needs a flag (the silent-drop failure mode)
+
+Before this feature, passing a pivotal-trained LoRA to `imagecli generate --lora X.safetensors` would load the transformer delta correctly but silently drop the trained `emb_params` tensor. The Qwen3 tokenizer never heard of the trigger, BPE-split it into sub-tokens with default embeddings, and the TE-side training was wasted. Training looked fine, inference ran without errors, generations looked acceptable — and pivotal-trained LoRAs scored identically to non-pivotal ones.
+
+imageCLI now **hard-errors** when a LoRA contains `emb_params` but no trigger was resolved. Passing `--trigger <word>` is required.
+
+### Usage
+
+```bash
+# CLI flag — merged format (emb_params inside the LoRA safetensors)
+imagecli generate "lyraface cat on a bench" --lora ./v23b_000002000.safetensors --trigger lyraface
+
+# Standalone embedding file (ai-toolkit A1111-format sibling)
+imagecli generate "lyraface cat" \
+    --lora ./v23b_lora_000002000.safetensors \
+    --embedding ./lyraface000002000.safetensors \
+    --trigger lyraface
+
+# Batch
+imagecli batch prompts/ --lora ./v23b.safetensors --trigger lyraface
+
+# Or via frontmatter (CLI flag overrides)
+# ---
+# lora_path: /path/to/v23b_000002000.safetensors
+# trigger: lyraface
+# ---
+```
+
+### User rule: write the bare trigger once
+
+The prompt expansion is **not idempotent**. imageCLI rewrites `"lyraface cat"` into `"lyraface lyraface_1 lyraface_2 lyraface_3 cat"` before tokenization, matching the diffusers textual-inversion expansion format. If you manually pre-expand (`"lyraface lyraface_1 cat"`), imageCLI logs a warning and skips expansion — but it's simpler to just write the bare trigger once and let the pipeline handle it.
+
+### How it works
+
+1. Load pipeline (bf16) — tokenizer + text encoder + transformer
+2. Load LoRA → fuse → unload (unchanged)
+3. **Pivotal hook** — runs before transformer quantization, while the TE is still on CPU in bf16:
+   - Read `emb_params` tensor from the LoRA safetensors (merged) or standalone file
+   - Validate shape: `(N, 2560)` with `1 <= N <= 32`
+   - Add placeholder tokens `[trigger, trigger_1, ..., trigger_{N-1}]` to the Qwen3 tokenizer
+   - `text_encoder.resize_token_embeddings(len(tokenizer))`
+   - Write the N trained vectors into `embed_tokens.weight[new_ids]`
+   - **Deterministic round-trip assertion** — reads back the vectors and asserts they match (`atol=5e-2`, bf16 precision bound)
+   - Monkey-patch `pipe.encode_prompt` to run `_maybe_convert_prompt` before delegating
+4. Quantize transformer (unchanged — only `nn.Linear` layers; the `nn.Embedding` in the TE is untouched)
+5. Generate — user's prompt is rewritten inside the patched `encode_prompt` before tokenization
+
+The tokenizer and TE changes are **disjoint from LoRA fuse/unload and from transformer quantization**. `unload_lora_weights()` only touches PEFT adapters on the transformer; `quantize(transformer, ...)` only touches `nn.Linear`. The `nn.Embedding` that holds the placeholder vectors survives both.
+
+### Supported formats
+
+| Format | Location | Trigger source |
+|---|---|---|
+| **Merged** | `emb_params` key inside the LoRA safetensors (ai-toolkit writes this via `extra_state_dict`) | `--trigger` or frontmatter `trigger:` (required) |
+| **Standalone** | Separate `{trigger}{step}.safetensors` with `emb_params` tensor + metadata `string_to_param = {"*": "emb_params"}` + metadata `name` | `--trigger`, frontmatter `trigger:`, or auto-inferred from metadata `name` |
+
+### Error cases
+
+| Condition | Behavior |
+|---|---|
+| LoRA has `emb_params`, no trigger resolved | **Hard error** — passes `--trigger` message; prevents silent drop |
+| `emb_params.shape[-1] != 2560` | **Hard error** — "LoRA trained against a different base model" |
+| `emb_params.ndim != 2` or `N < 1` or `N > 32` | **Hard error** with shape in the message |
+| `--trigger` provided but no `emb_params` found | **Warning + continue** (degraded to vanilla LoRA) |
+| Trigger word already exists in Qwen3 vocab | **Hard error** — use a different trigger |
+| Prompt already contains `{trigger}_1` (manual pre-expansion) | **Warning** on first inference — prompt is passed through unchanged |
 
 ---
 
