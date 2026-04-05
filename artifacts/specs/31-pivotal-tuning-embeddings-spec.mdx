@@ -249,14 +249,17 @@ CLI[--trigger,--embedding]
 - [ ] **SC-4** `emb_params` present in LoRA file + no trigger resolved (no `--trigger`, no frontmatter `trigger:`, no unambiguous sibling file) → raises an error whose message includes the substring `--trigger` and names the silent-drop failure mode
 - [ ] **SC-5a** `apply_pivotal_to_pipe` calls `tokenizer.add_tokens(placeholder_tokens)` and asserts the return value equals `N = emb_params.shape[0]`; raises if fewer were added
 - [ ] **SC-5b** `apply_pivotal_to_pipe` is independent of `unload_lora_weights` — calling `pipe.unload_lora_weights()` AFTER `apply_pivotal_to_pipe` leaves `tokenizer.added_tokens_encoder[trigger]` and `embed_tokens.weight[placeholder_ids[0]]` unchanged (unit test with a mock `unload_lora_weights` that is a no-op for TE/tokenizer)
-- [ ] **SC-6** Deterministic round-trip assertion at load time (inside `apply_pivotal_to_pipe`, run on every pivotal load):
+- [x] **SC-6** Deterministic round-trip check at load time (inside `apply_pivotal_to_pipe`, run on every pivotal load). **Must not be `assert`** — `assert` is stripped under `python -O` and would defeat the silent-drop prevention design goal. Use explicit `raise RuntimeError`:
   ```python
-  assert tokenizer.convert_tokens_to_ids(trigger) == placeholder_ids[0]
+  trigger_id = tokenizer.convert_tokens_to_ids(trigger)
+  if trigger_id != placeholder_ids[0]:
+      raise RuntimeError(...)
   te_rows = te.get_input_embeddings().weight[placeholder_ids].detach().float().cpu()
   src    = vectors.detach().float().cpu()
-  assert torch.allclose(te_rows, src, atol=1e-2), "pivotal round-trip failed"
+  if not torch.allclose(te_rows, src, atol=5e-2):
+      raise RuntimeError("pivotal round-trip: vector mismatch, max abs diff ...")
   ```
-  `atol=1e-2` is the correct bound: `emb_params` is typically stored as fp32 by ai-toolkit, the TE is bf16, and fp32→bf16→fp32 round-trip introduces error up to ~7.8e-3 (one bf16 ULP at magnitude 1). `1e-6` would always fail; `1e-2` still catches a completely wrong row (random-init) while tolerating the expected precision loss
+  **`atol=5e-2`** (revised from the original `atol=1e-2` during implementation). The original bound was derived for magnitude-1 values (`bf16 ULP ≈ 2^-8 ≈ 3.9e-3` at magnitude 1, so ~7.8e-3 round-trip worst case). However, bf16 ULP **scales with value magnitude** (`ULP ≈ |value| * 2^-8`), so at the ~3–4 magnitudes seen in `torch.randn`-sized tensors the per-value round-trip error can reach ~1.5e-2. `1e-2` reliably failed in testing; `5e-2` holds under the worst case while still catching a genuinely wrong row (random-init vs trained differs by ~1.0 in magnitude — a 20x safety margin). Real trained embeddings are typically smaller in magnitude (~0.02–1.0) with correspondingly tighter round-trip error, but the check must hold under the looser worst case.
 - [ ] **SC-7** Pivotal inference works on `flux2-klein` (quanto FP8) end-to-end: engine loads, SC-6 assertion passes, `imagecli generate "lyraface cat" --lora … --trigger lyraface -e flux2-klein` writes a valid PNG, peak VRAM within ±0.2 GB of the baseline LoRA path
 - [ ] **SC-8** Pivotal inference works on `flux2-klein-fp4` (NVFP4) end-to-end: engine loads, SC-6 assertion passes after `_runtime_quantize_transformer_to_nvfp4`, `imagecli generate … -e flux2-klein-fp4` writes a valid PNG
 - [ ] **SC-9** Visual A/B: same pivotal LoRA + same seed + prompt containing the bare trigger, run WITH the fix vs WITHOUT (git-checkout a pre-fix commit for the "without" half). Generated images visibly differ at the face. Artifact directory `~/.roxabi/forge/lyra/brand/V24-pivotal-verification/` contains:

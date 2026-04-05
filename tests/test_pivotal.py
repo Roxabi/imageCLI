@@ -525,3 +525,70 @@ def test_load_pivotal_embedding_standalone_missing_file(tmp_path: Path):
             trigger="lyraface",
             embedding_path=ghost,
         )
+
+
+# ── Integration sentinel: Flux2KleinPipeline class structure ──────────────
+
+
+def test_flux2_klein_pipeline_class_structure_sentinel():
+    """Catch diffusers attribute renames that would silently break the pivotal
+    engine hooks. imageCLI's apply_pivotal_to_pipe + _patch_encode_prompt rely
+    on specific attribute names on a Flux2KleinPipeline instance:
+
+      - pipe.tokenizer            (Qwen2Tokenizer)
+      - pipe.text_encoder         (Qwen3Model)
+      - pipe.encode_prompt(...)   (instance method, monkey-patched)
+
+    If a future diffusers upgrade renames any of these (e.g. tokenizer →
+    tokenizer_2, text_encoder → t5_encoder, encode_prompt → _encode_text),
+    the MagicMock-based unit tests above would still pass but production
+    would crash at load time. This sentinel checks the real Flux2KleinPipeline
+    class structure without loading any weights, so it runs cheaply in CI and
+    fails fast on attribute drift.
+    """
+    import inspect
+
+    from diffusers import Flux2KleinPipeline
+
+    # Constructor parameters — these are the registered modules that the
+    # pipeline expects at instantiation. imageCLI's engine hooks access
+    # `self._pipe.tokenizer` and `self._pipe.text_encoder` after from_pretrained
+    # returns, so both names must be present here.
+    init_params = set(inspect.signature(Flux2KleinPipeline.__init__).parameters)
+    assert "tokenizer" in init_params, (
+        f"Flux2KleinPipeline.__init__ no longer accepts 'tokenizer' — "
+        f"pivotal hooks will break. Got params: {init_params}"
+    )
+    assert "text_encoder" in init_params, (
+        f"Flux2KleinPipeline.__init__ no longer accepts 'text_encoder' — "
+        f"pivotal hooks will break. Got params: {init_params}"
+    )
+    assert "transformer" in init_params, (
+        f"Flux2KleinPipeline.__init__ no longer accepts 'transformer' — "
+        f"engine load paths will break. Got params: {init_params}"
+    )
+
+    # encode_prompt must be a method on the pipeline class — _patch_encode_prompt
+    # replaces it at the instance level, so the class must expose it as the
+    # original callable.
+    assert hasattr(Flux2KleinPipeline, "encode_prompt"), (
+        "Flux2KleinPipeline no longer has an 'encode_prompt' method — "
+        "_patch_encode_prompt monkey-patch target is missing."
+    )
+    assert callable(getattr(Flux2KleinPipeline, "encode_prompt", None)), (
+        "Flux2KleinPipeline.encode_prompt is not callable."
+    )
+
+    # Must inherit LoRA loading (used by the engines before pivotal hooks fire)
+    # and be a DiffusionPipeline subclass (MRO sanity).
+    from diffusers.loaders.lora_pipeline import Flux2LoraLoaderMixin
+    from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+
+    assert issubclass(Flux2KleinPipeline, DiffusionPipeline), (
+        "Flux2KleinPipeline no longer inherits DiffusionPipeline — "
+        "pipeline class resolution may have shifted."
+    )
+    assert issubclass(Flux2KleinPipeline, Flux2LoraLoaderMixin), (
+        "Flux2KleinPipeline no longer inherits Flux2LoraLoaderMixin — "
+        "the pre-pivotal LoRA fuse path may break."
+    )
