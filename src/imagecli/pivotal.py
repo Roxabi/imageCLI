@@ -228,25 +228,33 @@ def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
         for i, pid in enumerate(placeholder_ids):
             weight[pid] = vecs[i]
 
-    # Deterministic round-trip assertion (SC-6) — closes the silent-failure
-    # loop at wire-time. atol=5e-2 accounts for fp32→bf16→fp32 precision loss:
-    # bf16 ULP scales with magnitude (ULP ~= |value| * 2^-8), so at the ~3-4
+    # Deterministic round-trip check (SC-6) — closes the silent-failure loop
+    # at wire-time. atol=5e-2 accounts for fp32→bf16→fp32 precision loss: bf16
+    # ULP scales with magnitude (ULP ~= |value| * 2^-8), so at the ~3-4
     # magnitudes seen in torch.randn-sized tensors the per-value error can
     # reach ~1.5e-2. Real trained embeddings are typically smaller (magnitude
-    # ~0.02-1.0) with correspondingly tighter round-trip error, but the
-    # assertion must hold under the looser worst case. A genuinely wrong row
-    # (random-init vs trained) differs by ~1.0 in magnitude — 20x the bound —
-    # so this still catches silent misrouting.
-    assert tok.convert_tokens_to_ids(trigger) == placeholder_ids[0], (
-        f"pivotal round-trip: trigger id mismatch "
-        f"({tok.convert_tokens_to_ids(trigger)} vs {placeholder_ids[0]})"
-    )
+    # ~0.02-1.0) with correspondingly tighter round-trip error, but the check
+    # must hold under the looser worst case. A genuinely wrong row (random-init
+    # vs trained) differs by ~1.0 in magnitude — 20x the bound — so this still
+    # catches silent misrouting.
+    #
+    # Intentionally NOT `assert` — assert statements are stripped under
+    # `python -O` / PYTHONOPTIMIZE=1, which would defeat the entire silent-drop
+    # prevention design goal. Use explicit `raise RuntimeError` so the guard is
+    # preserved under every Python invocation mode.
+    trigger_id = tok.convert_tokens_to_ids(trigger)
+    if trigger_id != placeholder_ids[0]:
+        raise RuntimeError(
+            f"pivotal round-trip: trigger id mismatch "
+            f"({trigger_id} vs {placeholder_ids[0]})"
+        )
     te_rows = embed_tokens.weight[placeholder_ids].detach().float().cpu()
     src = pivotal.vectors.detach().float().cpu()
-    assert torch.allclose(te_rows, src, atol=5e-2), (
-        f"pivotal round-trip: vector mismatch, max abs diff "
-        f"{(te_rows - src).abs().max().item():.3e}"
-    )
+    if not torch.allclose(te_rows, src, atol=5e-2):
+        raise RuntimeError(
+            f"pivotal round-trip: vector mismatch, max abs diff "
+            f"{(te_rows - src).abs().max().item():.3e}"
+        )
 
     logger.info(
         "Pivotal: loaded %d tokens for %r from %s",
@@ -260,40 +268,64 @@ def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
 def _maybe_convert_prompt(prompt: str, tokenizer) -> str:
     """Expand bare triggers into their multi-vector placeholder form.
 
-    Copied from diffusers' ``TextualInversionLoaderMixin._maybe_convert_prompt``
-    (tokenizer-agnostic — uses only ``tokenizer.tokenize`` and
-    ``tokenizer.added_tokens_encoder``, both standard
-    ``PreTrainedTokenizerBase`` API). Adds a double-expansion warning: if the
-    user manually pre-expanded the prompt (``{trigger}_1`` already present),
-    we skip expansion and warn rather than double-expanding silently.
+    Tokenizer-agnostic — uses only ``tokenizer.tokenize`` and
+    ``tokenizer.added_tokens_encoder`` (standard ``PreTrainedTokenizerBase``
+    API). Adds a double-expansion warning: if the user manually pre-expanded
+    the prompt (``{trigger}_1`` already present), we skip expansion and warn
+    rather than double-expanding silently.
+
+    Substring-collision safe: rebuilds the output from the tokenized stream
+    rather than using ``str.replace`` on the raw prompt. A word like
+    ``"lyrafaces"`` that contains the trigger as a prefix is left untouched,
+    because replacement happens at the token level, not the substring level.
     """
     tokens = tokenizer.tokenize(prompt)
     unique = set(tokens)
-    for token in list(unique):
+
+    # Pre-compute expansions for each triggered token. Map trigger → expansion
+    # list (or None if not a trigger / skipped).
+    expansions: dict[str, list[str] | None] = {}
+    warned_doubles: set[str] = set()
+    for token in unique:
         if token not in tokenizer.added_tokens_encoder:
             continue
-        # Build the full multi-vector expansion
-        replacement = token
+        suffixes: list[str] = []
         i = 1
         while f"{token}_{i}" in tokenizer.added_tokens_encoder:
-            replacement += f" {token}_{i}"
+            suffixes.append(f"{token}_{i}")
             i += 1
-        if replacement == token:
-            # Single-vector placeholder (no suffixes registered) — nothing to do
+        if not suffixes:
+            # Single-vector placeholder — no expansion needed.
             continue
         # Double-expansion guard: if any suffix is already in the tokenized
         # prompt, the user pre-expanded manually. Skip + warn instead of
         # double-expanding (which produces garbage cross-attention).
-        if any(f"{token}_{j}" in unique for j in range(1, i)):
-            logger.warning(
-                "Prompt already contains placeholder %r — possible "
-                "double-expansion. Write the bare trigger once and let "
-                "pivotal.py expand it.",
-                f"{token}_1",
-            )
+        if any(s in unique for s in suffixes):
+            if token not in warned_doubles:
+                logger.warning(
+                    "Prompt already contains placeholder %r — possible "
+                    "double-expansion. Write the bare trigger once and let "
+                    "pivotal.py expand it.",
+                    f"{token}_1",
+                )
+                warned_doubles.add(token)
             continue
-        prompt = prompt.replace(token, replacement)
-    return prompt
+        expansions[token] = [token, *suffixes]
+
+    if not expansions:
+        return prompt
+
+    # Rebuild the prompt from the tokenized stream, substituting each trigger
+    # token with its expansion. Because the tokenizer's split is authoritative,
+    # this cannot corrupt substrings inside longer words.
+    out_tokens: list[str] = []
+    for t in tokens:
+        expansion = expansions.get(t)
+        if expansion is None:
+            out_tokens.append(t)
+        else:
+            out_tokens.extend(expansion)
+    return " ".join(out_tokens)
 
 
 def _patch_encode_prompt(pipe) -> None:
@@ -318,10 +350,17 @@ def _patch_encode_prompt(pipe) -> None:
     logged_first = [False]
 
     def _patched(*args, **kwargs):
+        # Resolve prompt from kwargs OR args[0], tracking which source so we can
+        # re-inject via the same channel (re-injecting a positional as kwarg
+        # would silently change the underlying encode_prompt's call signature
+        # if its first positional parameter is not named "prompt").
+        prompt_is_positional = False
         prompt = kwargs.get("prompt")
         if prompt is None and args:
             prompt = args[0]
-            args = args[1:]
+            prompt_is_positional = True
+
+        new_value: object = prompt  # default: unchanged
         if isinstance(prompt, str):
             new_prompt = _maybe_convert_prompt(prompt, tokenizer)
             if new_prompt != prompt:
@@ -330,13 +369,18 @@ def _patch_encode_prompt(pipe) -> None:
                     logged_first[0] = True
                 else:
                     logger.debug("Pivotal: expanded %r → %r", prompt, new_prompt)
-            kwargs["prompt"] = new_prompt
+            new_value = new_prompt
         elif isinstance(prompt, list):
             new_list = [_maybe_convert_prompt(p, tokenizer) for p in prompt]
             if new_list != prompt and not logged_first[0]:
                 logger.info("Pivotal: expanded prompts (list of %d)", len(prompt))
                 logged_first[0] = True
-            kwargs["prompt"] = new_list
+            new_value = new_list
+
+        if prompt_is_positional:
+            args = (new_value,) + args[1:]
+        else:
+            kwargs["prompt"] = new_value
         return original(*args, **kwargs)
 
     pipe.encode_prompt = _patched

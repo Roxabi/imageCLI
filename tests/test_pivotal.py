@@ -127,6 +127,7 @@ def test_load_standalone_format_with_explicit_trigger(tmp_path: Path):
     assert piv.trigger == "lyraface"
     assert piv.source == "standalone"
     assert piv.num_tokens == 4
+    assert piv.source_path == emb_path
 
 
 def test_load_standalone_format_trigger_inferred_from_metadata(tmp_path: Path):
@@ -260,6 +261,41 @@ def test_maybe_convert_prompt_double_expansion_warns(caplog):
     assert "double-expansion" in caplog.text.lower()
 
 
+def test_maybe_convert_prompt_substring_collision():
+    """Catches the str.replace substring hazard: trigger 'lyraface' must NOT
+    corrupt the longer word 'lyrafaces' when the tokenizer returns 'lyrafaces'
+    as a distinct token (i.e. 'lyraface' is not in the tokenized output).
+    """
+    tok = _make_tok_with_added(
+        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
+    )
+    # Tokenizer mock splits on whitespace, so "lyrafaces" is one token and is
+    # NOT in added_tokens_encoder → expansion should not fire.
+    out = _maybe_convert_prompt("lyrafaces in space", tok)
+    assert out == "lyrafaces in space", (
+        f"substring collision: 'lyrafaces' was corrupted by str.replace expansion. "
+        f"Got: {out!r}"
+    )
+
+
+def test_maybe_convert_prompt_substring_collision_when_trigger_tokenized():
+    """Harder case: if 'lyraface' IS present as a token in the same prompt
+    alongside a substring-containing word, the expansion must only replace
+    whole tokens, not substrings inside other words.
+    """
+    tok = _make_tok_with_added(
+        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
+    )
+    # "lyraface" is a real trigger word here, "lyrafaces" is a different token
+    # that happens to contain "lyraface" as a prefix. The trigger should expand,
+    # but "lyrafaces" must stay intact.
+    out = _maybe_convert_prompt("lyraface and lyrafaces coexist", tok)
+    # The trigger expands; "lyrafaces" is untouched.
+    assert out == (
+        "lyraface lyraface_1 lyraface_2 lyraface_3 and lyrafaces coexist"
+    ), f"substring collision during expansion: got {out!r}"
+
+
 # ── apply_pivotal_to_pipe tests (V2 RED: T2.9) ────────────────────────────
 
 
@@ -282,6 +318,10 @@ def test_apply_adds_exactly_n_tokens(tmp_path: Path):
 
 def test_apply_round_trip_assertion_passes(tmp_path: Path):
     pipe = _make_mock_pipe()
+    # Fixed seed: torch.randn tails (~4σ) can occasionally produce values where
+    # bf16 round-trip exceeds 5e-2 across 10240 elements. Deterministic seed
+    # eliminates that flake risk without weakening the test.
+    torch.manual_seed(42)
     vecs = torch.randn(4, 2560, dtype=torch.float32)
     piv = PivotalEmbedding(
         trigger="lyraface",
@@ -424,3 +464,64 @@ def test_patch_encode_prompt_passthrough_when_no_trigger(tmp_path: Path):
     pipe.encode_prompt(prompt="a plain cat on a bench")
     # No trigger in prompt → passthrough unchanged
     assert recorded["prompt"] == "a plain cat on a bench"
+
+
+def test_patch_encode_prompt_handles_positional_arg(tmp_path: Path):
+    """Ensure the _patched closure correctly expands a prompt passed as a
+    positional argument (not keyword), and re-injects it at the same position
+    rather than converting it to a kwarg — which would silently change the
+    call signature seen by the underlying encode_prompt.
+    """
+    pipe = _make_mock_pipe()
+    piv = PivotalEmbedding(
+        trigger="lyraface",
+        vectors=torch.randn(4, 2560, dtype=torch.float32),
+        num_tokens=4,
+        source="merged",
+        source_path=tmp_path / "x.safetensors",
+    )
+    apply_pivotal_to_pipe(pipe, piv)
+
+    recorded = {}
+
+    def _record(*args, **kwargs):
+        recorded["args"] = args
+        recorded["kwargs"] = kwargs
+        return ("embeds", "ids")
+
+    pipe.encode_prompt = _record
+    _patch_encode_prompt(pipe)
+
+    # Positional call — prompt is args[0], not a kwarg
+    pipe.encode_prompt("lyraface cat")
+
+    # The expanded prompt must arrive via args (positional), not kwargs
+    assert recorded["args"] == (
+        "lyraface lyraface_1 lyraface_2 lyraface_3 cat",
+    ), f"positional prompt was re-routed to kwargs: args={recorded['args']}, kwargs={recorded['kwargs']}"
+    assert "prompt" not in recorded["kwargs"], (
+        "positional prompt must not leak into kwargs"
+    )
+
+
+# ── Missing-file error path tests ─────────────────────────────────────────
+
+
+def test_detect_pivotal_in_lora_missing_file(tmp_path: Path):
+    """`detect_pivotal_in_lora` should propagate FileNotFoundError (or the
+    safetensors-equivalent) when called on a non-existent path.
+    """
+    ghost = tmp_path / "ghost.safetensors"
+    with pytest.raises((FileNotFoundError, OSError)):
+        detect_pivotal_in_lora(ghost)
+
+
+def test_load_pivotal_embedding_standalone_missing_file(tmp_path: Path):
+    """Explicit `embedding_path` pointing at a non-existent file should raise."""
+    ghost = tmp_path / "ghost.safetensors"
+    with pytest.raises((FileNotFoundError, OSError)):
+        load_pivotal_embedding(
+            lora_path=None,
+            trigger="lyraface",
+            embedding_path=ghost,
+        )
