@@ -48,25 +48,10 @@ class Flux2KleinEngine(ImageEngine):
             self._pipe.fuse_lora()
             self._pipe.unload_lora_weights()
             logger.info("LoRA fused into base weights.")
-        # Pivotal tuning embeddings: load trained trigger vectors into the TE
-        # BEFORE transformer quantization. Touches tokenizer + embed_tokens only;
+        # Pivotal tuning: load trained trigger vectors into the TE BEFORE
+        # transformer quantization. Touches tokenizer + embed_tokens only;
         # disjoint from LoRA fuse/unload and transformer quantize.
-        if self.lora_path or self.embedding_path:
-            from imagecli.pivotal import (
-                _patch_encode_prompt,
-                apply_pivotal_to_pipe,
-                load_pivotal_embedding,
-            )
-
-            pivotal = load_pivotal_embedding(
-                self.lora_path,
-                self.trigger,
-                embedding_path=self.embedding_path,
-                te_hidden_size=self._pipe.text_encoder.config.hidden_size,
-            )
-            if pivotal is not None:
-                apply_pivotal_to_pipe(self._pipe, pivotal)
-                _patch_encode_prompt(self._pipe)
+        self._apply_pivotal_embeddings()
         # Quantize transformer to FP8: 7.75 GB → ~3.9 GB.
         logger.info("Quantizing transformer to float8...")
         quantize(self._pipe.transformer, weights=qfloat8)

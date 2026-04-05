@@ -191,14 +191,21 @@ def generate(
         Optional[str],
         typer.Option(
             "--trigger",
-            help="Pivotal tuning trigger word. Required when the LoRA contains emb_params.",
+            help=(
+                "Pivotal tuning trigger word (e.g. 'lyraface'). Required when "
+                "the LoRA was trained with ai-toolkit's 'embedding:' block. "
+                "See docs/lora.md for details."
+            ),
         ),
     ] = None,
     embedding: Annotated[
         Optional[str],
         typer.Option(
             "--embedding",
-            help="Path to a standalone pivotal embedding (.safetensors). Overrides emb_params in the LoRA.",
+            help=(
+                "Path to a standalone pivotal embedding (.safetensors). "
+                "Overrides emb_params in the LoRA file. See docs/lora.md."
+            ),
         ),
     ] = None,
     no_compile: Annotated[
@@ -314,14 +321,21 @@ def batch(
         Optional[str],
         typer.Option(
             "--trigger",
-            help="Pivotal tuning trigger word. Required when the LoRA contains emb_params.",
+            help=(
+                "Pivotal tuning trigger word (e.g. 'lyraface'). Required when "
+                "the LoRA was trained with ai-toolkit's 'embedding:' block. "
+                "See docs/lora.md for details."
+            ),
         ),
     ] = None,
     embedding: Annotated[
         Optional[str],
         typer.Option(
             "--embedding",
-            help="Path to a standalone pivotal embedding (.safetensors). Overrides emb_params in the LoRA.",
+            help=(
+                "Path to a standalone pivotal embedding (.safetensors). "
+                "Overrides emb_params in the LoRA file. See docs/lora.md."
+            ),
         ),
     ] = None,
 ):

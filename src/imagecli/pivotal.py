@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 # safety margin that still catches gibberish shapes.
 _MAX_NUM_TOKENS = 32
 
+# Upper bound on metadata["name"] raw string length before json.loads. The
+# safetensors spec does not bound metadata string sizes, so a corrupted file
+# could set "name" to an arbitrarily large JSON document. 256 chars is far
+# larger than any realistic trigger word while keeping the parse cost trivial.
+_MAX_METADATA_NAME_LEN = 256
+
 
 @dataclass
 class PivotalEmbedding:
@@ -58,46 +64,6 @@ def detect_pivotal_in_lora(lora_path: Path | str) -> bool:
 
     with safe_open(str(lora_path), framework="pt", device="cpu") as f:
         return "emb_params" in f.keys()
-
-
-def _read_emb_params(path: Path | str) -> tuple[torch.Tensor, dict[str, str]]:
-    """Read ``emb_params`` tensor + metadata dict from a safetensors file.
-
-    Returns (tensor, metadata). Raises KeyError if ``emb_params`` is absent.
-    """
-    from safetensors import safe_open
-
-    with safe_open(str(path), framework="pt", device="cpu") as f:
-        metadata = f.metadata() or {}
-        if "emb_params" not in f.keys():
-            raise KeyError(f"emb_params not found in {path}")
-        tensor = f.get_tensor("emb_params")
-    return tensor, metadata
-
-
-def _load_merged(lora_path: Path) -> tuple[torch.Tensor, Path]:
-    """Load emb_params from a merged LoRA safetensors. Returns (tensor, source_path)."""
-    tensor, _meta = _read_emb_params(lora_path)
-    return tensor, lora_path
-
-
-def _load_standalone(
-    embedding_path: Path, trigger: str | None
-) -> tuple[torch.Tensor, str | None, Path]:
-    """Load emb_params from a standalone A1111-format safetensors file.
-
-    Returns (tensor, inferred_trigger, source_path). The inferred trigger is
-    read from safetensors metadata ``name`` (JSON-encoded per ai-toolkit) if
-    the caller did not supply one.
-    """
-    tensor, metadata = _read_emb_params(embedding_path)
-    inferred_trigger = trigger
-    if inferred_trigger is None and "name" in metadata:
-        try:
-            inferred_trigger = json.loads(metadata["name"])
-        except (json.JSONDecodeError, TypeError):
-            inferred_trigger = metadata["name"]  # raw string fallback
-    return tensor, inferred_trigger, embedding_path
 
 
 def _validate(tensor: torch.Tensor, te_hidden_size: int) -> None:
@@ -148,21 +114,45 @@ def load_pivotal_embedding(
         always mentions ``--trigger`` because silent-continue was the V23b
         failure mode this feature exists to prevent.
     """
+    from safetensors import safe_open
+
     source: Literal["merged", "standalone"]
-    tensor: torch.Tensor
     source_path: Path
 
+    # Resolve the source file and read emb_params + metadata in one pass.
     if embedding_path is not None:
-        emb_path = Path(embedding_path)
-        tensor, inferred_trigger, source_path = _load_standalone(emb_path, trigger)
-        trigger = trigger or inferred_trigger
+        source_path = Path(embedding_path)
         source = "standalone"
     elif lora_path is not None and detect_pivotal_in_lora(lora_path):
-        tensor, source_path = _load_merged(Path(lora_path))
+        source_path = Path(lora_path)
         source = "merged"
     else:
         # No pivotal embedding present. Caller decides whether to warn.
         return None
+
+    with safe_open(str(source_path), framework="pt", device="cpu") as f:
+        metadata = f.metadata() or {}
+        if "emb_params" not in f.keys():
+            raise KeyError(f"emb_params not found in {source_path}")
+        tensor = f.get_tensor("emb_params")
+
+    # Standalone format: trigger may be inferred from metadata "name".
+    # Bound the raw metadata string before parsing — safetensors does not cap
+    # metadata string sizes, so a corrupted file could carry an enormous JSON
+    # document that would balloon memory via json.loads.
+    if source == "standalone" and trigger is None and "name" in metadata:
+        raw_name = metadata["name"]
+        if len(raw_name) > _MAX_METADATA_NAME_LEN:
+            raise ValueError(
+                f"metadata['name'] exceeds {_MAX_METADATA_NAME_LEN} chars "
+                f"({len(raw_name)}); refusing to parse as JSON."
+            )
+        try:
+            parsed = json.loads(raw_name)
+        except (json.JSONDecodeError, TypeError):
+            parsed = raw_name  # raw string fallback
+        if isinstance(parsed, str):
+            trigger = parsed
 
     if trigger is None:
         raise ValueError(
@@ -210,12 +200,32 @@ def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
     n = pivotal.num_tokens
     placeholder_tokens = [trigger] + [f"{trigger}_{i}" for i in range(1, n)]
 
-    added = tok.add_tokens(placeholder_tokens)
-    if added != n:
+    # Pre-check for collisions BEFORE calling add_tokens. HuggingFace add_tokens
+    # is not atomic — if some tokens already exist and others don't, the new
+    # ones are added anyway and we only learn about the conflict via the return
+    # count. That leaves the tokenizer partially mutated, which is confusing to
+    # diagnose. Checking against added_tokens_encoder and the base vocab up-front
+    # keeps the operation atomic: either all tokens are fresh and we proceed, or
+    # we raise without touching the tokenizer.
+    added_encoder = getattr(tok, "added_tokens_encoder", {}) or {}
+    base_vocab = tok.get_vocab() if hasattr(tok, "get_vocab") else {}
+    collisions = [
+        t for t in placeholder_tokens if t in added_encoder or t in base_vocab
+    ]
+    if collisions:
         raise ValueError(
             f"Trigger {trigger!r} (or its suffixes) already exist in the "
-            f"tokenizer vocabulary. Only {added}/{n} tokens added. Use a "
-            f"different trigger word."
+            f"tokenizer vocabulary: {collisions}. Use a different trigger word."
+        )
+
+    added = tok.add_tokens(placeholder_tokens)
+    if added != n:
+        # Defensive: should be unreachable given the pre-check, but if a
+        # tokenizer implementation de-duplicates differently than we expect,
+        # surface the mismatch rather than silently corrupting the TE.
+        raise ValueError(
+            f"Trigger {trigger!r}: pre-check passed but add_tokens returned "
+            f"{added}/{n}. Tokenizer state may be inconsistent."
         )
 
     te.resize_token_embeddings(len(tok))
