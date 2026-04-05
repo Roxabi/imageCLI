@@ -1,0 +1,65 @@
+---
+title: Load ai-toolkit pivotal tuning embeddings at inference
+issue: 31
+status: approved
+tier: F-full
+date: 2026-04-05
+---
+
+## Problem
+
+LoRAs trained with ai-toolkit's **pivotal tuning** (`embedding:` block alongside `network:`) cannot be used through imageCLI's current LoRA inference path. The transformer-side LoRA weights load and fuse correctly, but the learned **token embeddings** — the `emb_params` tensor representing the trigger word — are silently discarded. The TE-side contribution to the LoRA is lost entirely at inference time.
+
+**Silent failure mode:** training "succeeds", safetensors load without errors, generations look acceptable, but a pivotal-trained LoRA scores identically to a non-pivotal LoRA. Verified end-to-end during the Lyra V23 LoRA exploration (2026-04-05): the transformer LoRA attaches, but the Qwen3 tokenizer has never heard of the trigger (e.g. `lyraface`), BPE-splits it into sub-tokens with default embeddings, and the trained N embedding vectors are never wired into the text encoder's input embedding layer.
+
+**Observable impact:**
+- Blocks Lyra V23b (pivotal attribution run) — already cancelled after this finding
+- Blocks any future identity LoRA using pivotal tuning (the 16 GB-feasible alternative to full TE training, which OOMs on Klein 4B's Qwen3 TE)
+- Training compute spent on pivotal runs is wasted because inference can't consume the TE half
+
+## Who
+
+- **Primary:** Mickael — building Lyra avatar LoRAs (V23+) on `imageCLI` + `flux2-klein-fp4`, needs pivotal tuning to tighten trigger-word semantics at 16 GB VRAM
+- **Secondary:** Any `imageCLI` user training identity LoRAs via ai-toolkit who enables the `embedding:` block — currently they hit the silent failure without realizing it
+
+## Constraints
+
+- **Qwen3 tokenizer ≠ CLIP.** Diffusers' `TextualInversionLoaderMixin` was built for CLIP/SentencePiece; Qwen3 uses BPE with different special-token handling and vocab-resize semantics. Porting the mixin verbatim is not possible — `Flux2KleinPipeline` does not inherit it.
+- **`Flux2KleinPipeline.load_textual_inversion` does not exist.** The diffusers FLUX.2 pipeline class was built with LoRA-only loading (MRO: `DiffusionPipeline → ConfigMixin → PushToHubMixin → Flux2LoraLoaderMixin → LoraBaseMixin`). We have to implement the resize + write path ourselves.
+- **Load-order dependency.** Klein 4B's text encoder is loaded before the transformer is quantized (`flux2_klein_fp4.py:315-318`, `flux2_klein.py` same). Tokenizer + `embed_tokens` resize must happen at that point, not after `fuse_lora`.
+- **Must coexist with quantization.** Target engines:
+  - `flux2-klein` (quanto FP8 transformer, bf16 TE)
+  - `flux2-klein-fp4` (NVFP4 transformer via comfy-kitchen, bf16 TE)
+  In both, the TE stays bf16 while the transformer is quantized — `embed_tokens` should be editable, but this needs confirmation per engine.
+- **`unload_lora_weights()` independence.** After `fuse_lora()` the adapter is unloaded (`flux2_klein_fp4.py:330`). Tokenizer/TE changes must survive that unload — separate code paths, expected to be independent, needs verification.
+- **ai-toolkit writes the embedding in two places** — merged into the LoRA safetensors under key `emb_params`, AND as a separate A1111-format file `{trigger}{step_num}.safetensors` (see `ai-toolkit/jobs/process/BaseSDTrainProcess.py:534-556`). Loader must handle both.
+- **Prompt expansion is inference-critical.** User writes `"lyraface"` in the prompt — before tokenization we must expand to `"<lyraface_0><lyraface_1>...<lyraface_N-1>"` (or equivalent multi-token form) so the trained vectors are actually used. No mixin helper is available; we write this ourselves.
+
+## Out of Scope
+
+- **Multi-LoRA stacking with independent embeddings.** If a user passes multiple `--lora` flags in the future, each might have its own embedding — acknowledged but not solved here. Interface should not preclude it.
+- **FP4 engine support via pre-quantized weights.** `flux2-klein-fp4` uses pre-quantized weights; LoRA is already unsupported there at the transformer level. Embedding (TE-side) support *might* still work since the TE is separate, but this is secondary to the two target engines above. Revisit in spec.
+- **CLIP/other pipelines.** Only `Flux2KleinPipeline` (Qwen3 TE) is in scope. FLUX.1 dev/schnell are unaffected.
+- **Training-side changes in ai-toolkit.** We consume ai-toolkit's output format as-is. No upstream PR.
+- **Generic textual inversion UX.** This is pivotal-tuning-specific (N placeholder tokens, known trigger). We are not building a general `load_textual_inversion` replacement.
+
+## Complexity
+
+**Tier: F-full** — touches text encoder internals, tokenizer vocabulary resize, per-engine load order, quantization interactions, and prompt-time string rewriting. Non-obvious verification surface (the failure mode is silent) and Qwen3 BPE semantics that can't be copied from CLIP prior art.
+
+**Signals observed:**
+- Multi-domain: tokenizer + text encoder + LoRA loader + CLI args + docs
+- Multi-engine: must verify on both `flux2-klein` (quanto FP8) and `flux2-klein-fp4` (NVFP4)
+- New pattern: first imageCLI feature that mutates the text encoder / tokenizer at load time
+- Unknowns: Qwen3 BPE resize behavior, NVFP4 TE interaction, A1111-format standalone embedding parsing
+- Silent-failure risk: acceptance depends on *comparing* pivotal vs non-pivotal outputs to prove the trained vectors are live — not just "it ran"
+- Issue body explicitly enumerates 7 implementation steps and 5 complications to verify → clearly not a 1-afternoon change
+
+## Related Work
+
+- `~/.roxabi/forge/lyra/brand/V23-EXPLORATION.md` — full verification trail, and the run cancelled because of this finding
+- `ai-toolkit/jobs/process/BaseSDTrainProcess.py:534-556` — save format (merged + standalone)
+- `src/imagecli/engines/flux2_klein_fp4.py:320-331` — current LoRA load path (no TE touch)
+- `src/imagecli/engines/flux2_klein.py` — same pattern
+- `docs/lora.md` — existing LoRA docs, will need an update
+- imageCLI#23 (importable python library) — unrelated but same engine surface
