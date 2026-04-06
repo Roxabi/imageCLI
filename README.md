@@ -142,6 +142,7 @@ Public API (`__all__`): `generate`, `get_engine`, `list_engines`, `preflight_che
 | `flux2-klein-fp8` | FLUX.2-klein-4B FP8 | ~13GB | 50 | ~4s/step | torchao FP8 weight-only. No quanto, torch.compile compatible. **~40% slower** than quanto (dequant overhead). `uv sync --group fp8` |
 | `flux2-klein-fp4` | FLUX.2-klein-4B NVFP4 | ~11.5GB | 50 | ~6.8s/step | Blackwell FP4 via comfy-kitchen. ~2 GB transformer. Requires sm_120+ and cu130. `uv sync --group fp4` |
 | `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | 50 | ~25s | Face identity lock (Klein). Requires `face_image` in frontmatter. `uv sync --extra pulid` |
+| `pulid-flux2-klein-fp4` | FLUX.2-klein-4B + PuLID NVFP4 | ~8.5GB | 50 | ~36–37s | Face identity lock + NVFP4 quantization. ~26% faster than BF16 PuLID. Requires sm_120+ and cu130. `uv sync --extra pulid --group fp4` |
 | `pulid-flux1-dev` | FLUX.1-dev + PuLID v0.9.1 | ~10GB | 24 | ~42s | Face identity lock (recommended). GGUF Q5_K_S + PuLID. Clean 1024×1024, no banding. `uv sync --extra pulid` |
 | `flux1-dev` | FLUX.1-dev fp8 | ~10GB | 50 | ~30s | Maximum quality, longer prompts. fp8 via optimum-quanto |
 | `flux1-schnell` | FLUX.1-schnell fp8 | ~10GB | 4 | ~5s | Fastest. Apache 2.0, ungated. fp8 via optimum-quanto |
@@ -207,7 +208,7 @@ imagecli generate "prompt" --lora ./lora.safetensors --lora-scale 1.5  # boosted
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--engine` | `-e` | Engine name (`flux2-klein`, `flux2-klein-fp8`, `flux2-klein-fp4`, `pulid-flux2-klein`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
+| `--engine` | `-e` | Engine name (`flux2-klein`, `flux2-klein-fp8`, `flux2-klein-fp4`, `pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`) | `flux2-klein` |
 | `--width` | `-W` | Output width in pixels (multiple of 64) | `1024` |
 | `--height` | `-H` | Output height in pixels (multiple of 64) | `1024` |
 | `--steps` | `-s` | Inference steps | `50` |
@@ -269,7 +270,7 @@ Write prompts as `.md` files with YAML frontmatter. Store them in `images/prompt
 
 ```markdown
 ---
-engine: flux2-klein          # flux2-klein | flux2-klein-fp8 | flux2-klein-fp4 | pulid-flux2-klein | pulid-flux1-dev | flux1-dev | flux1-schnell | sd35
+engine: flux2-klein          # flux2-klein | flux2-klein-fp8 | flux2-klein-fp4 | pulid-flux2-klein | pulid-flux2-klein-fp4 | pulid-flux1-dev | flux1-dev | flux1-schnell | sd35
 width: 1024                  # pixels, must be a multiple of 64
 height: 1024
 steps: 50                    # inference steps (sd35 is fixed at 20)
@@ -277,7 +278,10 @@ guidance: 4.0                # CFG scale (sd35 is fixed at 1.0, flux1-schnell at
 seed: 42                     # optional — omit for a random result
 negative_prompt: "blurry, low quality, watermark"
 format: png                  # png | jpg | webp
-face_image: /path/to/ref.png # pulid engines only — reference face (abs or relative to .md)
+face_image: /path/to/ref.png # pulid engines only — single reference face (abs or relative to .md)
+face_images:                 # pulid engines only — multiple reference faces (takes precedence over face_image)
+  - /path/to/ref1.png        #   ArcFace + EVA-CLIP embeddings are averaged across all refs before id_former
+  - /path/to/ref2.png        #   gives a centroid identity more robust to pose/lighting variation
 pulid_strength: 0.6          # pulid engines only — identity lock strength (default 0.6, 0.8 for flux1-dev)
 lora_path: /path/to/lora.safetensors  # LoRA weights — flux2-klein and flux2-klein-fp8 only
 lora_scale: 1.0              # LoRA adapter scale (default 1.0, try 1.5 for stronger identity)
@@ -370,8 +374,9 @@ src/imagecli/
     flux2_klein.py        — FLUX.2-klein-4B engine (default, quanto FP8)
     flux2_klein_fp8.py    — FLUX.2-klein-4B torchao FP8 (40% slower than quanto, torch.compile compatible)
     flux2_klein_fp4.py    — FLUX.2-klein-4B NVFP4 (Blackwell FP4 via comfy-kitchen)
-    pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
-    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1 face identity lock
+    pulid_flux2_klein.py     — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
+    pulid_flux2_klein_fp4.py — FLUX.2-klein-4B + PuLID NVFP4 (Blackwell, ~8.5 GB, optional extra + fp4 group)
+    pulid_flux1_dev.py       — FLUX.1-dev GGUF + PuLID v0.9.1 face identity lock
     flux1_dev.py          — FLUX.1-dev fp8 quantized engine
     flux1_schnell.py      — FLUX.1-schnell fp8 quantized engine
     sd35.py               — SD3.5 Large Turbo engine

@@ -109,7 +109,7 @@ Hardcoded defaults when no config file is found: `engine="flux2-klein"`, `width=
 | Parameter | Type | Description |
 |---|---|---|
 | `prompt` | `str` | The text prompt to generate from. |
-| `engine` | `str \| None` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
+| `engine` | `str \| None` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
 | `width` | `int \| None` | Image width in pixels. Must be a multiple of 64. |
 | `height` | `int \| None` | Image height in pixels. Must be a multiple of 64. |
 | `steps` | `int \| None` | Number of inference steps. Ignored by `sd35` (fixed at 20) and `flux1-schnell` (fixed at 4). |
@@ -152,7 +152,7 @@ Use this for manual control over the engine lifecycle — for example, to reuse 
 
 | Parameter | Type | Description |
 |---|---|---|
-| `name` | `str` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
+| `name` | `str` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
 | `compile` | `bool` | Enable `torch.compile` when the engine loads (default `True`). |
 
 **Raises:**
@@ -314,13 +314,14 @@ class PromptDoc:
     seed: int | None = None
     format: str | None = None
     face_image: str | None = None
+    face_images: list[str] | None = None
     pulid_strength: float = 0.6
     extra: dict = field(default_factory=dict)
 ```
 
 Dataclass returned by `parse_prompt_file`. All fields except `prompt` are optional and will be `None` when not specified in the frontmatter.
 
-`face_image` and `pulid_strength` are used by the PuLID engines (`pulid-flux2-klein`, `pulid-flux1-dev`). `face_image` can be an absolute path or a path relative to the `.md` file's directory. `extra` contains any frontmatter keys not recognised by imagecli (useful for custom metadata).
+`face_image`, `face_images`, and `pulid_strength` are used by the PuLID engines (`pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`). `face_image` accepts a single reference image (absolute path or relative to the `.md` file's directory). `face_images` accepts a list of reference images — when present it takes precedence over `face_image`. ArcFace + EVA-CLIP embeddings are averaged across all references before `id_former`, producing a centroid identity that is more robust to pose and lighting variation. `extra` contains any frontmatter keys not recognised by imagecli (useful for custom metadata).
 
 ---
 

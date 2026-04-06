@@ -23,6 +23,7 @@ Generate images using imageCLI on the local GPU. This skill selects the right en
 | Photorealistic subjects | `sd35` | CFG-free, strong on realistic photos |
 | Face-locked images (recommended) | `pulid-flux1-dev` | Clean face lock, no banding, 1024x1024 |
 | Face-locked images (Klein quality) | `pulid-flux2-klein` | Klein texture + face lock via dim projection |
+| Face-locked images (Klein + NVFP4) | `pulid-flux2-klein-fp4` | Klein texture + face lock + NVFP4, ~8.5 GB, ~26% faster than BF16. Blackwell only. |
 | LoRA-based identity | `flux2-klein` + `--lora` | Pre-trained LoRA, no PuLID deps, natural texture |
 
 ### Performance: Single vs Batch
@@ -54,7 +55,7 @@ What would you like to generate?
 ## Phase 2 — Select Engine
 
 Based on Phase 1:
-- Face lock requested (reference image) -> `pulid-flux1-dev` (or `pulid-flux2-klein` if user prefers Klein texture)
+- Face lock requested (reference image) -> `pulid-flux1-dev` (or `pulid-flux2-klein` / `pulid-flux2-klein-fp4` if user prefers Klein texture; fp4 variant requires Blackwell GPU)
 - Face lock requested (trained LoRA) -> `flux2-klein --lora path/to/lora.safetensors`
 - Batch of 3+ without face lock -> `flux2-klein` (2-phase kicks in automatically)
 - Quick draft -> `flux1-schnell`
@@ -91,7 +92,11 @@ Use vivid, specific language. Describe lighting, composition, style.
 
 For face-locked images (PuLID), add:
 ```yaml
-face_image: /absolute/path/to/reference.png
+face_image: /absolute/path/to/reference.png   # single reference
+# OR — multiple references (averaged into centroid identity, more robust to pose/lighting):
+face_images:
+  - /absolute/path/to/ref1.png
+  - /absolute/path/to/ref2.png
 pulid_strength: 0.6    # 0.4-0.8, higher = stronger face lock
 ```
 
