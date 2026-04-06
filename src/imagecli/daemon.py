@@ -263,16 +263,20 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
                 encoded.append(job_id)
                 continue
 
+            negative_prompt = job.get("negative_prompt", "")
+
             with torch.no_grad():
                 prompt_embeds, text_ids = encoder_pipe.encode_prompt(prompt=prompt)
+                neg_embeds, neg_text_ids = encoder_pipe.encode_prompt(prompt=negative_prompt) if negative_prompt else (None, None)
 
-            torch.save(
-                {
-                    "prompt_embeds": prompt_embeds.cpu(),
-                    "text_ids": text_ids.cpu() if text_ids is not None else None,
-                },
-                embed_path,
-            )
+            payload = {
+                "prompt_embeds": prompt_embeds.cpu(),
+                "text_ids": text_ids.cpu() if text_ids is not None else None,
+            }
+            if neg_embeds is not None:
+                payload["negative_prompt_embeds"] = neg_embeds.cpu()
+                payload["negative_text_ids"] = neg_text_ids.cpu() if neg_text_ids is not None else None
+            torch.save(payload, embed_path)
 
             elapsed = time.time() - t0
             progress_msg = f"[{i + 1}/{len(jobs)}] {job_id} encoded  {elapsed:.0f}s"
@@ -333,10 +337,12 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
 
             data = torch.load(embed_path, weights_only=True)
             prompt_embeds = data["prompt_embeds"].to("cuda")
+            neg_embeds = data["negative_prompt_embeds"].to("cuda") if "negative_prompt_embeds" in data else None
 
             with torch.no_grad():
                 result = pipe(
                     prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=neg_embeds,
                     width=width,
                     height=height,
                     num_inference_steps=steps,
