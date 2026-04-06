@@ -374,9 +374,10 @@ class PuLIDFlux2KleinEngine(ImageEngine):
     vram_gb = 8.0  # with cpu_offload, peak during transformer forward ~9-10 GB
     capabilities = EngineCapabilities(negative_prompt=False)
 
-    def __init__(self, *, compile: bool = True) -> None:
+    def __init__(self, *, compile: bool = True, **kwargs: object) -> None:
         # torch.compile captures original forward methods — incompatible with per-generation patching
-        super().__init__(compile=False)
+        # LoRA not supported; absorb kwargs to allow get_engine() passthrough.
+        super().__init__(compile=False, **kwargs)  # type: ignore[arg-type]
         self._pulid: _PuLIDFlux2 | None = None
         self._insightface: object | None = None
         self._eva_clip: object | None = None

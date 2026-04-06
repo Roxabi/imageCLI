@@ -134,7 +134,10 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         n_quantized = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)  # type: ignore[union-attr]
         logger.info("Runtime-quantized %d linear layers to NVFP4.", n_quantized)
 
-        self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
+        # T5 text encoder (~8 GB BF16) stays on CPU — moved to CUDA only for the
+        # prompt-encoding step inside generate(), then offloaded back.  Keeping it
+        # on CUDA permanently would leave only ~3.5 GB headroom, which is not enough
+        # for 1024×1024 denoising + PuLID CA modules.
         self._pipe.vae.to("cuda")  # type: ignore[union-attr]
         self._set_execution_device()
         self._optimize_pipe(self._pipe, compile=False)
@@ -161,7 +164,9 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
             "EVA02-L-14-336",
             pretrained="merged2b_s6b_b61k",
         )
-        self._eva_clip = clip_model.visual.eval().to("cuda")
+        # EVA-CLIP stays on CPU at rest — generate() moves it to CUDA only during
+        # face embedding extraction, then back to CPU.
+        self._eva_clip = clip_model.visual.eval()
         logger.info("PuLID-FP4 engine ready.")
 
     # ── generate ──────────────────────────────────────────────────────────────
@@ -173,6 +178,13 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         face_image: str | None = None,
         pulid_strength: float = 0.6,
         output_path: Path,
+        negative_prompt: str = "",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        guidance: float = 3.5,
+        seed: int | None = None,
+        callback: object = None,
         **kwargs: object,
     ) -> Path:
         if not face_image:
@@ -181,23 +193,77 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
                 "Example: face_image: /path/to/reference.png"
             )
 
+        import gc
+        import random
+
         import torch
 
         self._load()
-        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image)
 
-        # EVA-CLIP is done — move to CPU to reclaim ~1 GB before denoising
+        # ── Step 1: face id tokens (EVA-CLIP temporarily on CUDA) ─────────────
         if self._eva_clip is not None:
-            self._eva_clip.to("cpu")
+            self._eva_clip.to("cuda")  # type: ignore[union-attr]
+        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image)
+        if self._eva_clip is not None:
+            self._eva_clip.to("cpu")  # type: ignore[union-attr]
         torch.cuda.empty_cache()
+        gc.collect()
+
+        # ── Step 2: prompt encoding (T5 temporarily on CUDA) ──────────────────
+        # T5 (~8 GB) is kept on CPU at rest; moving it to CUDA here and back
+        # keeps peak VRAM during encoding ≤ 12 GB (NVFP4 + T5 + PuLID).
+        self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
+        try:
+            with torch.inference_mode():
+                prompt_embeds, pooled_prompt_embeds, text_ids = (
+                    self._pipe.encode_prompt(  # type: ignore[union-attr]
+                        prompt=prompt,
+                        prompt_2=None,
+                        device=torch.device("cuda"),
+                        num_images_per_prompt=1,
+                    )
+                )
+        finally:
+            self._pipe.text_encoder.to("cpu")  # type: ignore[union-attr]
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        # ── Step 3: denoising with PuLID CA injection ─────────────────────────
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        generator = torch.Generator("cpu").manual_seed(seed)
+
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+        pipe_kwargs: dict = {
+            "prompt_embeds": prompt_embeds,
+            "pooled_prompt_embeds": pooled_prompt_embeds,
+            "width": width,
+            "height": height,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance,
+            "generator": generator,
+        }
+        if callback is not None:
+            pipe_kwargs["callback_on_step_end"] = callback
 
         unpatch = _patch_flux(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)  # type: ignore[union-attr]
         try:
-            return super().generate(prompt, output_path=output_path, **kwargs)
+            with torch.inference_mode():
+                result = self._pipe(**pipe_kwargs)  # type: ignore[union-attr]
         finally:
             unpatch()
-            if self._eva_clip is not None:
-                self._eva_clip.to("cuda")
+
+        return self._save_image(
+            result.images[0],
+            output_path,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
+        )
 
     # ── cleanup ───────────────────────────────────────────────────────────────
 
