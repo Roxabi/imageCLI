@@ -76,7 +76,7 @@ def _recv_generate(sock: socket.socket) -> dict:
 
 
 def daemon_main(engine: str = "flux2-klein") -> None:
-    """Start the generation daemon, preloading the transformer+VAE at startup.
+    """Start the generation daemon, preloading transformer+VAE and text encoder at startup.
 
     Args:
         engine: Engine name (currently only 'flux2-klein' is supported).
@@ -85,10 +85,21 @@ def daemon_main(engine: str = "flux2-klein") -> None:
     SOCKET_PATH.unlink(missing_ok=True)
 
     print(f"[imagecli daemon] Preloading {engine} transformer+VAE...", flush=True)
-    pipe = _load_pipe()
+    try:
+        pipe = _load_pipe()
+    except RuntimeError as exc:
+        print(f"[imagecli daemon] ERROR: {exc}", flush=True)
+        raise SystemExit(1)
+
+    print(f"[imagecli daemon] Preloading text encoder...", flush=True)
+    try:
+        encoder_pipe = _load_encoder()
+    except RuntimeError as exc:
+        print(f"[imagecli daemon] ERROR: {exc}", flush=True)
+        raise SystemExit(1)
 
     _queue: queue.Queue = queue.Queue()
-    threading.Thread(target=_worker, args=(_queue, pipe), daemon=True).start()
+    threading.Thread(target=_worker, args=(_queue, pipe, encoder_pipe), daemon=True).start()
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
         srv.bind(str(SOCKET_PATH))
@@ -119,12 +130,45 @@ def daemon_main(engine: str = "flux2-klein") -> None:
 # ── Worker ────────────────────────────────────────────────────────────────────
 
 
+# Minimum free VRAM required before loading each component (GB)
+_VRAM_TRANSFORMER_VAE = 4.5
+_VRAM_TEXT_ENCODER = 8.0
+
+
+def _check_vram(needed_gb: float, label: str) -> None:
+    """Raise RuntimeError if free VRAM is insufficient.
+
+    Calls empty_cache() first to release PyTorch reserved-but-unallocated memory
+    (e.g. leftover from a previous daemon instance that just exited).
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("No CUDA GPU detected")
+    torch.cuda.empty_cache()
+    free, total = torch.cuda.mem_get_info(0)
+    free_gb = free / 1024**3
+    total_gb = total / 1024**3
+    if free_gb < needed_gb:
+        raise RuntimeError(
+            f"[imagecli daemon] Not enough VRAM for {label}: "
+            f"need ~{needed_gb:.1f} GB, only {free_gb:.1f}/{total_gb:.1f} GB free"
+        )
+    print(
+        f"[imagecli daemon] VRAM check OK for {label}: "
+        f"{free_gb:.1f}/{total_gb:.1f} GB free (need {needed_gb:.1f} GB)",
+        flush=True,
+    )
+
+
 def _load_pipe():
     """Load FLUX.2-klein-4B transformer (fp8 quantized) + VAE. Deferred import."""
     import torch
     from diffusers import Flux2KleinPipeline
     from optimum.quanto import freeze, qfloat8, quantize
     from optimum.quanto.nn import QLinear
+
+    _check_vram(_VRAM_TRANSFORMER_VAE, "transformer+VAE")
 
     MODEL = "black-forest-labs/FLUX.2-klein-4B"
 
@@ -152,16 +196,99 @@ def _load_pipe():
     return pipe
 
 
-def _worker(q: queue.Queue, pipe: object) -> None:
-    """Worker thread — processes generation jobs sequentially, keeping pipe in VRAM."""
+def _load_encoder():
+    """Load FLUX.2-klein-4B text encoder (Qwen3) only. Deferred import."""
+    import torch
+    from diffusers import Flux2KleinPipeline
+
+    _check_vram(_VRAM_TEXT_ENCODER, "text encoder")
+
+    MODEL = "black-forest-labs/FLUX.2-klein-4B"
+
+    pipe = Flux2KleinPipeline.from_pretrained(
+        MODEL, transformer=None, vae=None, torch_dtype=torch.bfloat16
+    )
+    pipe.text_encoder.to("cuda")
+
+    used = torch.cuda.memory_allocated() / 1e9
+    total = torch.cuda.get_device_properties(0).total_memory / 1e9
+    print(f"[imagecli daemon] Text encoder on GPU  VRAM: {used:.1f}/{total:.1f} GB", flush=True)
+
+    return pipe
+
+
+def _worker(q: queue.Queue, pipe: object, encoder_pipe: object) -> None:
+    """Worker thread — processes encode and generate jobs sequentially, keeping models in VRAM."""
     while True:
         job: _Job = q.get()
         try:
-            _handle_job(job.conn, job.req, pipe)
+            if job.req.get("action") == "encode":
+                _handle_encode(job.conn, job.req, encoder_pipe)
+            else:
+                _handle_job(job.conn, job.req, pipe)
         except Exception as exc:
             print(f"[imagecli daemon] worker error: {exc}", flush=True)
         finally:
             q.task_done()
+
+
+def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None:
+    """Encode prompts to .pt embedding files. Called exclusively from the worker thread."""
+    import torch
+
+    try:
+        jobs = req.get("jobs")
+        if not jobs or not isinstance(jobs, list):
+            _send_json(conn, {"ok": False, "error": "missing or empty 'jobs' list"})
+            return
+
+        encoded = []
+        t0 = time.time()
+
+        for i, job in enumerate(jobs):
+            job_id = job.get("id")
+            prompt = job.get("prompt")
+            embed_path_str = job.get("embed_path")
+
+            if not job_id or not prompt or not embed_path_str:
+                _send_json(conn, {"ok": False, "error": f"job {i}: missing id, prompt, or embed_path"})
+                return
+
+            embed_path = Path(embed_path_str)
+            embed_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if embed_path.exists():
+                progress_msg = f"[{i + 1}/{len(jobs)}] {job_id} cached"
+                _send_json(conn, {"progress": progress_msg})
+                encoded.append(job_id)
+                continue
+
+            with torch.no_grad():
+                prompt_embeds, text_ids = encoder_pipe.encode_prompt(prompt=prompt)
+
+            torch.save(
+                {
+                    "prompt_embeds": prompt_embeds.cpu(),
+                    "text_ids": text_ids.cpu() if text_ids is not None else None,
+                },
+                embed_path,
+            )
+
+            elapsed = time.time() - t0
+            progress_msg = f"[{i + 1}/{len(jobs)}] {job_id} encoded  {elapsed:.0f}s"
+            print(f"[imagecli daemon] {progress_msg}", flush=True)
+            _send_json(conn, {"progress": progress_msg})
+            encoded.append(job_id)
+
+        _send_json(conn, {"ok": True, "encoded": encoded})
+
+    except Exception as exc:
+        try:
+            _send_json(conn, {"ok": False, "error": str(exc)})
+        except Exception as send_exc:
+            print(f"[imagecli daemon] warning: failed to send encode error: {send_exc}", flush=True)
+    finally:
+        conn.close()
 
 
 def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
