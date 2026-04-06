@@ -181,6 +181,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         prompt: str,
         *,
         face_image: str | None = None,
+        face_images: list[str] | None = None,
         pulid_strength: float = 0.6,
         output_path: Path,
         negative_prompt: str = "",
@@ -192,10 +193,12 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         callback: object = None,
         **kwargs: object,
     ) -> Path:
-        if not face_image:
+        refs = face_images or ([face_image] if face_image else None)
+        if not refs:
             raise ValueError(
-                "pulid-flux2-klein-fp4 requires 'face_image' in the prompt frontmatter.\n"
-                "Example: face_image: /path/to/reference.png"
+                "pulid-flux2-klein-fp4 requires 'face_image' or 'face_images' in the prompt frontmatter.\n"
+                "Example: face_image: /path/to/reference.png\n"
+                "         face_images: [/path/to/ref1.png, /path/to/ref2.png]"
             )
 
         import gc
@@ -208,7 +211,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         # ── Step 1: face id tokens (EVA-CLIP temporarily on CUDA) ─────────────
         if self._eva_clip is not None:
             self._eva_clip.to("cuda")  # type: ignore[union-attr]
-        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image)
+        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, refs)
         if self._eva_clip is not None:
             self._eva_clip.to("cpu")  # type: ignore[union-attr]
         torch.cuda.empty_cache()

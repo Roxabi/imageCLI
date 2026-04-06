@@ -30,6 +30,13 @@ def _resolve_face_image(face_image: str | None, prompt_dir: Path) -> str | None:
     return str(p if p.is_absolute() else (prompt_dir / p).resolve())
 
 
+def _resolve_face_images(face_images: list[str] | None, prompt_dir: Path) -> list[str] | None:
+    """Resolve a list of face image paths the same way as _resolve_face_image."""
+    if not face_images:
+        return None
+    return [_resolve_face_image(p, prompt_dir) for p in face_images]  # type: ignore[misc]
+
+
 app = typer.Typer(
     name="imagecli",
     help="Local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends.",
@@ -70,6 +77,7 @@ def _run_generate(
     steps_explicit: bool = False,
     guidance_explicit: bool = False,
     face_image: str | None = None,
+    face_images: list[str] | None = None,
     pulid_strength: float = 0.6,
     lora_path: str | None = None,
     lora_scale: float = 1.0,
@@ -135,6 +143,7 @@ def _run_generate(
                 output_path=output_path,
                 callback=_step_callback,
                 face_image=face_image,
+                face_images=face_images,
                 pulid_strength=pulid_strength,
             )
     finally:
@@ -237,6 +246,7 @@ def generate(
         face_img = _resolve_face_image(face_image, Path.cwd()) or _resolve_face_image(
             doc.face_image, path.parent
         )
+        face_imgs = _resolve_face_images(doc.face_images, path.parent)
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
         lora_p = lora or doc.lora_path
         lora_s = lora_scale if lora_scale is not None else doc.lora_scale
@@ -257,6 +267,7 @@ def generate(
         steps_explicit = steps is not None
         guidance_explicit = guidance is not None
         face_img = _resolve_face_image(face_image, Path.cwd())
+        face_imgs = None
         pulid_str = pulid_strength if pulid_strength is not None else 0.6
         lora_p = lora
         lora_s = lora_scale if lora_scale is not None else 1.0
@@ -285,6 +296,7 @@ def generate(
         steps_explicit=steps_explicit,
         guidance_explicit=guidance_explicit,
         face_image=face_img,
+        face_images=face_imgs,
         pulid_strength=pulid_str,
         lora_path=lora_p,
         lora_scale=lora_s,
@@ -662,6 +674,7 @@ def _batch_sequential(
                 steps_explicit=steps_explicit,
                 guidance_explicit=guidance_explicit,
                 face_image=_resolve_face_image(doc.face_image, f.parent),
+                face_images=_resolve_face_images(doc.face_images, f.parent),
                 pulid_strength=doc.pulid_strength,
             )
             successes += 1

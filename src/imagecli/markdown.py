@@ -28,6 +28,7 @@ class PromptDoc:
     seed: int | None = None
     format: str | None = None
     face_image: str | None = None
+    face_images: list[str] | None = None
     pulid_strength: float = 0.6
     lora_path: str | None = None
     lora_scale: float = 1.0
@@ -69,6 +70,7 @@ def parse_prompt_file(path: Path) -> PromptDoc:
         seed=_int(frontmatter.pop("seed", None)),
         format=frontmatter.pop("format", None),
         face_image=frontmatter.pop("face_image", None),
+        face_images=_strlist(frontmatter.pop("face_images", None)),
         pulid_strength=_float(frontmatter.pop("pulid_strength", None)) or 0.6,
         lora_path=frontmatter.pop("lora_path", None),
         lora_scale=_float(frontmatter.pop("lora_scale", None)) or 1.0,
@@ -84,3 +86,12 @@ def _int(v) -> int | None:
 
 def _float(v) -> float | None:
     return float(v) if v is not None else None
+
+
+def _strlist(v) -> list[str] | None:
+    """Accept a YAML list or a single string; return list[str] or None."""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    return [str(v)]
