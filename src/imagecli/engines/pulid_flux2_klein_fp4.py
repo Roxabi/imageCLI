@@ -134,7 +134,12 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         n_quantized = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)  # type: ignore[union-attr]
         logger.info("Runtime-quantized %d linear layers to NVFP4.", n_quantized)
 
-        # T5 text encoder (~8 GB BF16) stays on CPU — moved to CUDA only for the
+        # Move remaining non-linear params (norms, biases, embeddings) to CUDA.
+        # NVFP4 linear weights are already on CUDA after quantization; this call
+        # only touches the residual ~1 GB BF16 params that stayed on CPU.
+        self._pipe.transformer.to("cuda")  # type: ignore[union-attr]
+
+        # Qwen3 text encoder stays on CPU — moved to CUDA only for the
         # prompt-encoding step inside generate(), then offloaded back.  Keeping it
         # on CUDA permanently would leave only ~3.5 GB headroom, which is not enough
         # for 1024×1024 denoising + PuLID CA modules.
@@ -209,19 +214,17 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         torch.cuda.empty_cache()
         gc.collect()
 
-        # ── Step 2: prompt encoding (T5 temporarily on CUDA) ──────────────────
-        # T5 (~8 GB) is kept on CPU at rest; moving it to CUDA here and back
-        # keeps peak VRAM during encoding ≤ 12 GB (NVFP4 + T5 + PuLID).
+        # ── Step 2: prompt encoding (Qwen3 encoder temporarily on CUDA) ─────────
+        # Qwen3 text encoder is kept on CPU at rest; moved to CUDA here and back
+        # to cap peak VRAM during encoding at NVFP4 + Qwen3 + PuLID ≤ 12 GB.
         self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
         try:
             with torch.inference_mode():
-                prompt_embeds, pooled_prompt_embeds, text_ids = (
-                    self._pipe.encode_prompt(  # type: ignore[union-attr]
-                        prompt=prompt,
-                        prompt_2=None,
-                        device=torch.device("cuda"),
-                        num_images_per_prompt=1,
-                    )
+                # encode_prompt returns (prompt_embeds [B,S,D], text_ids [B,S,4])
+                prompt_embeds, _text_ids = self._pipe.encode_prompt(  # type: ignore[union-attr]
+                    prompt=prompt,
+                    device=torch.device("cuda"),
+                    num_images_per_prompt=1,
                 )
         finally:
             self._pipe.text_encoder.to("cpu")  # type: ignore[union-attr]
@@ -238,7 +241,6 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         pipe_kwargs: dict = {
             "prompt_embeds": prompt_embeds,
-            "pooled_prompt_embeds": pooled_prompt_embeds,
             "width": width,
             "height": height,
             "num_inference_steps": steps,
