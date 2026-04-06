@@ -27,6 +27,7 @@ def test_engines_command():
     assert "flux2-klein" in result.output
     assert "flux1-dev" in result.output
     assert "sd35" in result.output
+    assert "pulid-flux2-klein-fp4" in result.output
 
 
 def test_info_command_no_cuda():
