@@ -27,6 +27,11 @@ def test_registry_has_all_engines():
     assert "flux1-dev" in registry
     assert "flux1-schnell" in registry
     assert "sd35" in registry
+    assert "pulid-flux2-klein-fp4" in registry
+    assert "pulid-flux2-klein" in registry
+    assert "flux2-klein-fp4" in registry
+    assert "flux2-klein-fp8" in registry
+    assert "pulid-flux1-dev" in registry
 
 
 def test_get_engine_valid():
@@ -463,3 +468,85 @@ def test_list_engines_flux2_klein_capabilities_values():
     # Assert: flux2-klein capability values match spec
     assert caps["negative_prompt"] is False
     assert caps["fixed_steps"] is None
+
+
+# ── PuLIDFlux2KleinFP4Engine — _check_requirements() ───────────────────────
+
+
+def test_pulid_fp4_check_requirements_no_cuda():
+    """_check_requirements() raises RuntimeError when no CUDA GPU is present."""
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
+
+    engine = PuLIDFlux2KleinFP4Engine()
+
+    with (
+        patch.dict("sys.modules", {"comfy_kitchen": MagicMock()}),
+        patch("torch.cuda.is_available", return_value=False),
+    ):
+        with pytest.raises(RuntimeError, match="requires a CUDA GPU"):
+            engine._check_requirements()
+
+
+def test_pulid_fp4_check_requirements_wrong_sm():
+    """_check_requirements() raises RuntimeError when GPU is below sm_120 (Blackwell)."""
+    import torch as _torch
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
+
+    engine = PuLIDFlux2KleinFP4Engine()
+
+    with (
+        patch.dict("sys.modules", {"comfy_kitchen": MagicMock()}),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_capability", return_value=(8, 6)),
+        patch.object(_torch.version, "cuda", "13.0"),
+    ):
+        with pytest.raises(RuntimeError, match="sm_120"):
+            engine._check_requirements()
+
+
+def test_pulid_fp4_check_requirements_old_cuda():
+    """_check_requirements() raises RuntimeError when CUDA version is below 13."""
+    import torch as _torch
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
+
+    engine = PuLIDFlux2KleinFP4Engine()
+
+    with (
+        patch.dict("sys.modules", {"comfy_kitchen": MagicMock()}),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_capability", return_value=(12, 0)),
+        patch.object(_torch.version, "cuda", "12.4"),
+    ):
+        with pytest.raises(RuntimeError, match="CUDA 13.0"):
+            engine._check_requirements()
+
+
+def test_pulid_fp4_check_requirements_missing_comfy_kitchen():
+    """_check_requirements() raises RuntimeError when comfy_kitchen is not importable."""
+    import torch as _torch
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
+
+    engine = PuLIDFlux2KleinFP4Engine()
+
+    with (
+        patch.dict("sys.modules", {"comfy_kitchen": None}),
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_device_capability", return_value=(12, 0)),
+        patch.object(_torch.version, "cuda", "13.0"),
+    ):
+        with pytest.raises(RuntimeError, match="comfy-kitchen"):
+            engine._check_requirements()
+
+
+# ── PuLIDFlux2KleinFP4Engine — generate() face_image guard ──────────────────
+
+
+def test_pulid_fp4_generate_requires_face_image():
+    """generate() must raise ValueError when face_image is not provided."""
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
+
+    engine = PuLIDFlux2KleinFP4Engine()
+    engine._pipe = MagicMock()  # skip _load()
+
+    with pytest.raises(ValueError, match="face_image"):
+        engine.generate("a prompt", output_path=Path("/tmp/out.png"))

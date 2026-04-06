@@ -305,6 +305,65 @@ def _patch_flux(
     return unpatch
 
 
+# ── shared identity extraction ────────────────────────────────────────────────
+
+
+def _extract_id_tokens(
+    insightface: object,
+    eva_clip: object,
+    pulid: _PuLIDFlux2,
+    face_image_path: str,
+) -> torch.Tensor:
+    """Extract PuLID identity tokens from a face reference image.
+
+    Shared by PuLIDFlux2KleinEngine and PuLIDFlux2KleinFP4Engine so that any
+    bug fix applies to both engines automatically.
+    """
+    from PIL import Image
+
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
+
+    img = np.array(Image.open(face_image_path).convert("RGB"))
+    faces = insightface.get(img)  # type: ignore[union-attr]
+    if not faces:
+        raise RuntimeError(f"No face detected in reference image: {face_image_path}")
+
+    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+    id_embed = torch.from_numpy(face.embedding).unsqueeze(0).to(device, dtype=dtype)
+    id_embed = F.normalize(id_embed, dim=-1)
+
+    x1, y1, x2, y2 = face.bbox.astype(int)
+    margin = int(max(x2 - x1, y2 - y1) * 0.2)
+    x1, y1 = max(0, x1 - margin), max(0, y1 - margin)
+    x2, y2 = min(img.shape[1], x2 + margin), min(img.shape[0], y2 + margin)
+
+    face_t = (
+        torch.from_numpy(img[y1:y2, x1:x2].astype(np.float32) / 255.0)
+        .permute(2, 0, 1)
+        .unsqueeze(0)
+        .to(device)
+    )
+    face_t = F.interpolate(face_t, size=(336, 336), mode="bilinear", align_corners=False)
+    mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
+    std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
+    face_t = (face_t - mean) / std
+
+    with torch.no_grad():
+        clip_out = eva_clip(face_t.float())  # type: ignore[union-attr]
+        if isinstance(clip_out, (list, tuple)):
+            clip_out = clip_out[0]
+        if clip_out.dim() == 3:
+            clip_out = clip_out[:, 0, :]
+        clip_embed = clip_out.to(device, dtype=dtype)
+
+        id_tokens = pulid.id_former(id_embed, clip_embed)
+        id_tokens = F.normalize(id_tokens, p=2, dim=-1)
+
+    return id_tokens
+
+
 # ── engine ─────────────────────────────────────────────────────────────────────
 
 
@@ -380,49 +439,7 @@ class PuLIDFlux2KleinEngine(ImageEngine):
         logger.info("PuLID engine ready.")
 
     def _extract_id_tokens(self, face_image_path: str) -> torch.Tensor:
-        from PIL import Image
-
-        device = torch.device("cuda")
-        dtype = torch.bfloat16
-
-        img = np.array(Image.open(face_image_path).convert("RGB"))
-        faces = self._insightface.get(img)  # type: ignore[union-attr]
-        if not faces:
-            raise RuntimeError(f"No face detected in reference image: {face_image_path}")
-
-        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-
-        id_embed = torch.from_numpy(face.embedding).unsqueeze(0).to(device, dtype=dtype)
-        id_embed = F.normalize(id_embed, dim=-1)
-
-        x1, y1, x2, y2 = face.bbox.astype(int)
-        margin = int(max(x2 - x1, y2 - y1) * 0.2)
-        x1, y1 = max(0, x1 - margin), max(0, y1 - margin)
-        x2, y2 = min(img.shape[1], x2 + margin), min(img.shape[0], y2 + margin)
-
-        face_t = (
-            torch.from_numpy(img[y1:y2, x1:x2].astype(np.float32) / 255.0)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .to(device)
-        )
-        face_t = F.interpolate(face_t, size=(336, 336), mode="bilinear", align_corners=False)
-        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
-        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
-        face_t = (face_t - mean) / std
-
-        with torch.no_grad():
-            clip_out = self._eva_clip(face_t.float())  # type: ignore[union-attr]
-            if isinstance(clip_out, (list, tuple)):
-                clip_out = clip_out[0]
-            if clip_out.dim() == 3:
-                clip_out = clip_out[:, 0, :]
-            clip_embed = clip_out.to(device, dtype=dtype)
-
-            id_tokens = self._pulid.id_former(id_embed, clip_embed)  # type: ignore[union-attr]
-            id_tokens = F.normalize(id_tokens, p=2, dim=-1)
-
-        return id_tokens
+        return _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image_path)
 
     def generate(
         self,

@@ -22,15 +22,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-
 from imagecli.engine import EngineCapabilities, ImageEngine
 from imagecli.engines.pulid_flux2_klein import (
     _INSIGHTFACE_DIR,
     _PULID_DEFAULT,
     _PuLIDFlux2,
+    _extract_id_tokens,
     _patch_flux,
 )
 
@@ -59,6 +56,8 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
     # ── hardware + dependency checks ──────────────────────────────────────────
 
     def _check_requirements(self) -> None:
+        import torch
+
         if not torch.cuda.is_available():
             raise RuntimeError("pulid-flux2-klein-fp4 requires a CUDA GPU.")
         sm = torch.cuda.get_device_capability()
@@ -85,18 +84,19 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
     def _set_execution_device(self) -> None:
         """Override pipeline._execution_device so all-on-GPU denoising routes to CUDA.
 
-        Without this, pipelines that skip enable_model_cpu_offload() may resolve
-        the execution device from offload hooks that don't exist and silently
-        fall back to CPU.
+        Creates a per-instance anonymous subclass with a fixed _execution_device
+        property so the patch is isolated to this pipeline object and is fully
+        reversed in cleanup() by restoring the original class.
         """
-        self._pipe._execution_device_override = torch.device("cuda")  # type: ignore[union-attr]
+        import torch  # noqa: F401 (torch.device used below)
+
         orig_cls = type(self._pipe)
-        if not hasattr(orig_cls, "_orig_execution_device"):
-            orig_cls._orig_execution_device = orig_cls._execution_device  # type: ignore[attr-defined]
-            orig_cls._execution_device = property(  # type: ignore[attr-defined]
-                lambda pipe: getattr(pipe, "_execution_device_override", None)
-                or orig_cls._orig_execution_device.fget(pipe)
-            )
+        patched_cls = type(
+            f"_{orig_cls.__name__}AllGPU",
+            (orig_cls,),
+            {"_execution_device": property(lambda _self: torch.device("cuda"))},
+        )
+        self._pipe.__class__ = patched_cls  # type: ignore[union-attr]
 
     # ── load ──────────────────────────────────────────────────────────────────
 
@@ -106,9 +106,15 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         import os
 
+        import torch
+
         os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
         self._check_requirements()
+
+        from imagecli.engine import preflight_check
+
+        preflight_check(self)
 
         from diffusers import Flux2KleinPipeline
 
@@ -120,9 +126,11 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
             torch_dtype=torch.bfloat16,
         )
 
-        # Quantize transformer to NVFP4 before moving other components to GPU.
-        # Transformer lands first (~2 GB), then text encoder (~4.5 GB) + VAE (~0.2 GB).
-        self._pipe.transformer.to("cuda")  # type: ignore[union-attr]
+        # Runtime-quantize transformer to NVFP4 — weights are moved to CUDA
+        # layer-by-layer inside _runtime_quantize_transformer_to_nvfp4, so no
+        # explicit transformer.to("cuda") is needed before quantization. This
+        # avoids a ~10 GB BF16 peak that would occur if the full transformer
+        # were moved to GPU before quantization begins.
         n_quantized = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)  # type: ignore[union-attr]
         logger.info("Runtime-quantized %d linear layers to NVFP4.", n_quantized)
 
@@ -156,53 +164,6 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         self._eva_clip = clip_model.visual.eval().to("cuda")
         logger.info("PuLID-FP4 engine ready.")
 
-    # ── identity extraction (copied from PuLIDFlux2KleinEngine) ──────────────
-
-    def _extract_id_tokens(self, face_image_path: str) -> torch.Tensor:
-        from PIL import Image
-
-        device = torch.device("cuda")
-        dtype = torch.bfloat16
-
-        img = np.array(Image.open(face_image_path).convert("RGB"))
-        faces = self._insightface.get(img)  # type: ignore[union-attr]
-        if not faces:
-            raise RuntimeError(f"No face detected in reference image: {face_image_path}")
-
-        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-
-        id_embed = torch.from_numpy(face.embedding).unsqueeze(0).to(device, dtype=dtype)
-        id_embed = F.normalize(id_embed, dim=-1)
-
-        x1, y1, x2, y2 = face.bbox.astype(int)
-        margin = int(max(x2 - x1, y2 - y1) * 0.2)
-        x1, y1 = max(0, x1 - margin), max(0, y1 - margin)
-        x2, y2 = min(img.shape[1], x2 + margin), min(img.shape[0], y2 + margin)
-
-        face_t = (
-            torch.from_numpy(img[y1:y2, x1:x2].astype(np.float32) / 255.0)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .to(device)
-        )
-        face_t = F.interpolate(face_t, size=(336, 336), mode="bilinear", align_corners=False)
-        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
-        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
-        face_t = (face_t - mean) / std
-
-        with torch.no_grad():
-            clip_out = self._eva_clip(face_t.float())  # type: ignore[union-attr]
-            if isinstance(clip_out, (list, tuple)):
-                clip_out = clip_out[0]
-            if clip_out.dim() == 3:
-                clip_out = clip_out[:, 0, :]
-            clip_embed = clip_out.to(device, dtype=dtype)
-
-            id_tokens = self._pulid.id_former(id_embed, clip_embed)  # type: ignore[union-attr]
-            id_tokens = F.normalize(id_tokens, p=2, dim=-1)
-
-        return id_tokens
-
     # ── generate ──────────────────────────────────────────────────────────────
 
     def generate(
@@ -220,8 +181,10 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
                 "Example: face_image: /path/to/reference.png"
             )
 
+        import torch
+
         self._load()
-        id_tokens = self._extract_id_tokens(face_image)
+        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image)
 
         # EVA-CLIP is done — move to CPU to reclaim ~1 GB before denoising
         if self._eva_clip is not None:
@@ -239,6 +202,10 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
     # ── cleanup ───────────────────────────────────────────────────────────────
 
     def cleanup(self) -> None:
+        # Restore the original pipeline class before teardown so the per-instance
+        # AllGPU subclass created by _set_execution_device() doesn't leak.
+        if self._pipe is not None and type(self._pipe).__name__.endswith("AllGPU"):
+            self._pipe.__class__ = type(self._pipe).__bases__[0]
         self._pulid = None
         self._insightface = None
         self._eva_clip = None
