@@ -91,7 +91,7 @@ def daemon_main(engine: str = "flux2-klein") -> None:
         print(f"[imagecli daemon] ERROR: {exc}", flush=True)
         raise SystemExit(1)
 
-    print(f"[imagecli daemon] Preloading text encoder...", flush=True)
+    print("[imagecli daemon] Preloading text encoder...", flush=True)
     try:
         encoder_pipe = _load_encoder()
     except RuntimeError as exc:

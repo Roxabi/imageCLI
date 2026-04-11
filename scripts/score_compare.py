@@ -24,7 +24,6 @@ from PIL import Image
 # ─── Buffalo (InsightFace) ────────────────────────────────────────────────────
 
 def load_buffalo(model_root="~/ComfyUI/models/insightface"):
-    import insightface
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(
         name="antelopev2",
