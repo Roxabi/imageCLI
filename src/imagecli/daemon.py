@@ -224,12 +224,58 @@ def _worker(q: queue.Queue, pipe: object, encoder_pipe: object) -> None:
         try:
             if job.req.get("action") == "encode":
                 _handle_encode(job.conn, job.req, encoder_pipe)
+            elif job.req.get("action") == "blend":
+                _handle_blend(job.conn, job.req)
             else:
                 _handle_job(job.conn, job.req, pipe)
         except Exception as exc:
             print(f"[imagecli daemon] worker error: {exc}", flush=True)
         finally:
             q.task_done()
+
+
+def _handle_blend(conn: socket.socket, req: dict) -> None:
+    """Blend pre-encoded .pt embeddings by weighted sum. No model needed."""
+    import torch
+
+    try:
+        inputs = req.get("inputs")  # [{path, weight}, ...]
+        out_path_str = req.get("out_path")
+        if not inputs or not out_path_str:
+            _send_json(conn, {"ok": False, "error": "missing inputs or out_path"})
+            return
+
+        out_path = Path(out_path_str)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load all embeds and weighted-sum each tensor key
+        # Work in float32 for precision, then cast back to original dtype
+        blended: dict = {}
+        orig_dtypes: dict = {}
+        for entry in inputs:
+            w = float(entry.get("weight", 1.0))
+            data = torch.load(entry["path"], weights_only=True)
+            for key, tensor in data.items():
+                if key not in orig_dtypes:
+                    orig_dtypes[key] = tensor.dtype
+                t = tensor.float() * w
+                blended[key] = blended[key] + t if key in blended else t
+
+        # Restore original dtypes
+        for key in blended:
+            if key in orig_dtypes:
+                blended[key] = blended[key].to(orig_dtypes[key])
+
+        torch.save(blended, out_path)
+        _send_json(conn, {"ok": True})
+
+    except Exception as exc:
+        try:
+            _send_json(conn, {"ok": False, "error": str(exc)})
+        except Exception:
+            pass
+    finally:
+        conn.close()
 
 
 def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None:
