@@ -68,7 +68,7 @@ fp8 = [
     "torchao>=0.9",
 ]
 fp4 = [
-    "comfy-kitchen[cublas]>=0.2.7",
+    "comfy-kitchen[cublas]>=0.2.8",
 ]
 pulid = [
     "insightface>=0.7.3",
