@@ -72,7 +72,7 @@ fp4 = [
 ]
 pulid = [
     "insightface>=0.7.3",
-    "onnxruntime-gpu>=1.16.0",
+    "onnxruntime-gpu>=1.24.4",
     "open-clip-torch>=3.2.0",
     "safetensors>=0.4.0",
     "opencv-python>=4.8.0",
