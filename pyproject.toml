@@ -13,7 +13,7 @@ dependencies = [
     "protobuf>=5.0",
     "Pillow>=10.0",
     "torch>=2.11",
-    "torchvision>=0.22",
+    "torchvision>=0.26.0",
     "optimum[quanto]>=1.24",
     "tomli>=2.0; python_version < '3.11'",
     "gguf>=0.18.0",
@@ -49,7 +49,7 @@ diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37
 [tool.uv]
 override-dependencies = [
     "torch>=2.11",
-    "torchvision>=0.22",
+    "torchvision>=0.26.0",
     # numpy<2 required by insightface (compiled against 1.x ABI)
     "numpy>=1.26,<2.0",
 ]
