@@ -17,6 +17,7 @@ images/images_out/
 
 # Claude config (personal, not shared)
 .claude/settings.local.json
+.claude/worktrees/
 
 # Dev
 .ruff_cache/
