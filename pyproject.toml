@@ -65,7 +65,7 @@ dev = [
     "pip-licenses>=5.5.1",
 ]
 fp8 = [
-    "torchao>=0.9",
+    "torchao>=0.17.0",
 ]
 fp4 = [
     "comfy-kitchen[cublas]>=0.2.7",
