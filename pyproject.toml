@@ -51,7 +51,7 @@ override-dependencies = [
     "torch>=2.11",
     "torchvision>=0.22",
     # numpy<2 required by insightface (compiled against 1.x ABI)
-    "numpy>=1.26,<2.0",
+    "numpy>=1.26,<3.0",
 ]
 
 [tool.pytest.ini_options]
@@ -76,6 +76,6 @@ pulid = [
     "open-clip-torch>=3.3.0",
     "safetensors>=0.4.0",
     "opencv-python>=4.8.0",
-    "numpy>=1.26,<2.0",
+    "numpy>=1.26,<3.0",
     "ml_dtypes>=0.4.0",
 ]
