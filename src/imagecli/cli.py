@@ -708,6 +708,29 @@ def serve(
     daemon_main(engine)
 
 
+# ── NATS commands ──────────────────────────────────────────────────────────────
+
+nats_app = typer.Typer(help="NATS subscriber for Lyra-driven image generation.")
+app.add_typer(nats_app, name="nats-serve")
+
+
+@nats_app.command("image")
+def nats_serve(
+    engine: str = typer.Option("flux2-klein", "--engine", "-e", help="Default engine for requests."),
+    nats_url: str = typer.Option("nats://localhost:4222", envvar="NATS_URL", help="NATS server URL."),
+) -> None:
+    """Start NATS subscriber for image generation requests."""
+    import asyncio
+
+    from imagecli.nats import ImageNatsAdapter
+
+    adapter = ImageNatsAdapter(default_engine=engine)
+    try:
+        asyncio.run(adapter.run(nats_url=nats_url))
+    except KeyboardInterrupt:
+        pass
+
+
 @app.command()
 def engines():
     """List available image generation engines."""
