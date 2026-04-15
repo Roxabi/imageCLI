@@ -1,0 +1,291 @@
+---
+title: "ADR-046: imageCLI NATS ingress for async image generation"
+description: Establish imageCLI as a NATS satellite service for Lyra, using roxabi-nats SDK and a request-reply contract for GPU-bound image generation workloads.
+---
+
+## Status
+
+Proposed
+
+## Context
+
+Lyra (the personal AI agent) currently has no way to request image generation asynchronously. When Lyra needs to generate an image, it must either:
+
+1. **Invoke imageCLI synchronously via subprocess** — blocking the agent loop while the GPU-bound generation completes (seconds to minutes depending on resolution and engine).
+2. **Shell out to an external service** — losing local GPU inference and incurring latency/cost.
+
+Neither option fits the hub-and-spoke architecture that Lyra uses for voice (STT/TTS via NATS). The voice adapters (`SttAdapterStandalone`, `TtsAdapterStandalone`) run as satellite processes that own their GPU workloads and communicate with the hub over NATS request-reply. This decoupling lets the hub remain responsive while GPU-heavy work happens elsewhere, potentially on a different host.
+
+Image generation has similar constraints:
+
+- **GPU-bound** — FLUX.2-klein-4B requires 8–12 GB VRAM; cannot run in the hub venv.
+- **Long-running** — 512x512 generation takes 15–30 seconds; 1024x1024 takes 2–3 minutes.
+- **Parameter-rich** — prompt, engine, dimensions, steps, guidance, seed, LoRA, negative prompt, output format.
+- **Resource-sensitive** — VRAM availability varies; the adapter should signal capacity via heartbeats.
+
+The roxabi-nats SDK (`NatsAdapterBase`) already provides the lifecycle primitives needed: NATS connection with hub readiness wait, graceful drain/close, envelope validation, queue-group subscription, and heartbeat publishing. The voice adapters prove this pattern works in production.
+
+This ADR freezes the NATS contract between Lyra (hub) and imageCLI (satellite), establishing `ImageNatsAdapter` as a new satellite alongside the existing STT/TTS adapters.
+
+## Decision
+
+### Python version
+
+This ADR assumes Python 3.12 (`requires-python = ">=3.12,<3.13"`). Rationale:
+
+- **Blackwell support:** RTX 5070 Ti (sm_120) requires PyTorch 2.11+ with CUDA 13.0, which has best compatibility with Python 3.12.
+- **Consistency:** The Roxabi stack (lyra, voiceCLI, roxabi-nats) standardized on 3.12 for Blackwell support.
+- **No backport needed:** The NATS satellite runs on the dev host (ROXABITOWER), not on older Ampere hardware.
+
+### Architecture
+
+`ImageNatsAdapter` subclasses `NatsAdapterBase` from the `roxabi-nats` SDK. It runs as a standalone supervisor process (`imagecli_gen`), subscribes to `lyra.image.generate.request`, and responds to the reply-to inbox. The hub never imports imageCLI — this process does.
+
+```
+Lyra hub (no imageCLI import)
+    |
+    |  NATS request-reply
+    v
+ImageNatsAdapter (owns imageCLI engine)
+    |
+    |  Engine API
+    v
+ImageEngine (flux2-klein, flux1-dev, etc.)
+```
+
+The adapter follows the same bootstrap pattern as `TtsAdapterStandalone`:
+
+- Load `imagecli.toml` config on startup.
+- Initialize the engine registry lazily (first request loads the model).
+- Publish heartbeats every 5 seconds to `lyra.image.heartbeat`.
+- Track active request count for capacity signalling.
+
+### Subjects
+
+| Subject | Direction | Producer | Consumer | Purpose |
+|---|---|---|---|---|
+| `lyra.image.generate.request` | request-reply | `NatsImageClient` (hub) | `ImageNatsAdapter.handle` (satellite) | Generate image from prompt |
+| `lyra.image.heartbeat` | fire-and-forget | `ImageNatsAdapter` (satellite) | `NatsImageClient._on_heartbeat` (hub) | Liveness + capacity |
+
+Queue group: `IMAGE_WORKERS` for load balancing across satellite replicas. Replies use the NATS request-reply inbox; no dedicated reply subject.
+
+### Payload encoding
+
+UTF-8 JSON. Binary image output is base64-encoded in-payload (no sidecar stream). NATS `max_payload` is the hard ceiling; requests that would produce images exceeding it must use file output mode (see "Large image handling" below).
+
+### `contract_version` — additive, one-way
+
+Every payload carries `contract_version: "1"` as a top-level string field, following ADR-044 conventions:
+
+- **Producers MUST emit it** on every outgoing request, reply, and heartbeat.
+- **Consumers MUST ignore unknown values.**
+- The field is **additive**, not a handshake.
+
+### Request — `lyra.image.generate.request`
+
+```json
+{
+  "contract_version": "1",
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "prompt": "a serene mountain landscape at sunset",
+  "engine": "flux2-klein",
+  "width": 1024,
+  "height": 1024,
+  "steps": 28,
+  "guidance": 4.0,
+  "seed": null,
+  "negative_prompt": null,
+  "format": "png",
+  "lora_path": null,
+  "lora_scale": null,
+  "output_mode": "b64"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|:---:|---|
+| `contract_version` | string | ✓ | Always `"1"` for this ADR |
+| `request_id` | string (uuid4) | ✓ | Echoed back in the reply |
+| `prompt` | string | ✓ | Text prompt for image generation |
+| `engine` | string | ✓ | Engine name: `flux2-klein`, `flux2-klein-fp8`, `flux2-klein-fp4`, `pulid-flux2-klein`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35` |
+| `width` | integer | — | Width in pixels; default per engine |
+| `height` | integer | — | Height in pixels; default per engine |
+| `steps` | integer | — | Inference steps; default per engine |
+| `guidance` | float | — | CFG scale; default per engine |
+| `seed` | integer \| null | — | Reproducibility seed; null = random |
+| `negative_prompt` | string \| null | — | What to avoid in generation |
+| `format` | string | — | Output format: `png`, `jpg`, `webp`; default `png` |
+| `lora_path` | string \| null | — | **File path** to LoRA weights (not payload); see LoRA section |
+| `lora_scale` | float \| null | — | LoRA adapter scale; default 1.0 |
+| `output_mode` | string | — | `b64` (default) or `file`; see Large image handling |
+
+**Note:** `engine` validation happens before model load. Unknown engines return `unknown_engine` error immediately.
+
+### Reply — `lyra.image.generate.request` (success)
+
+```json
+{
+  "contract_version": "1",
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "ok": true,
+  "image_b64": "iVBORw0KGgoAAAANS...",
+  "mime_type": "image/png",
+  "width": 1024,
+  "height": 1024,
+  "engine": "flux2-klein",
+  "seed_used": 42
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|:---:|---|
+| `contract_version` | string | ✓ | Always `"1"` |
+| `request_id` | string | ✓ | Echoed from request |
+| `ok` | boolean | ✓ | `true` for success |
+| `image_b64` | string (base64) | ✓* | Base64-encoded image; present when `output_mode=b64` |
+| `file_path` | string | ✓* | Absolute path to saved image; present when `output_mode=file` |
+| `mime_type` | string | ✓ | `image/png`, `image/jpeg`, or `image/webp` |
+| `width` | integer | ✓ | Actual output width |
+| `height` | integer | ✓ | Actual output height |
+| `engine` | string | ✓ | Engine used for generation |
+| `seed_used` | integer | ✓ | Seed value used (random if not specified) |
+
+\* Exactly one of `image_b64` or `file_path` is present, determined by `output_mode`.
+
+### Reply — `lyra.image.generate.request` (error)
+
+```json
+{
+  "contract_version": "1",
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "ok": false,
+  "error": "insufficient_resources",
+  "error_detail": "Free VRAM 2.1 GB < required 8.0 GB"
+}
+```
+
+Error codes are short snake_case tokens:
+
+| Error code | When emitted |
+|---|---|
+| `missing_required_field` | `prompt` or `engine` absent or empty |
+| `unknown_engine` | Engine name not in registry |
+| `insufficient_resources` | Preflight check fails (VRAM or RAM below threshold) |
+| `engine_load_failed` | Model weights failed to load (download error, corruption, OOM during load) |
+| `generation_failed` | Inference error after model loaded successfully |
+
+The hub raises `ImageUnavailableError` on `ok: false` regardless of the specific `error` value — the token is for logs and observability, not for control flow. `error_detail` is an optional human-readable string for debugging.
+
+### Heartbeat — `lyra.image.heartbeat`
+
+```json
+{
+  "contract_version": "1",
+  "worker_id": "imagecli-roxabituwer-1712934123",
+  "service": "image_workers",
+  "host": "roxabituwer",
+  "subject": "lyra.image.generate.request",
+  "queue_group": "image_workers",
+  "ts": 1712934198.123,
+  "engine_loaded": null,
+  "active_requests": 0
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|:---:|---|
+| `contract_version` | string | ✓ | Always `"1"` |
+| `worker_id` | string | ✓ | Unique per process; hub indexes freshness by this key |
+| `service`, `queue_group`, `subject`, `host`, `ts` | string/number | ✓ | Populated by `NatsAdapterBase.heartbeat_payload` |
+| `engine_loaded` | string \| null | — | Currently loaded engine name; `null` if no engine loaded yet |
+| `active_requests` | integer | — | In-flight count for capacity signalling |
+
+**Note:** VRAM metrics are intentionally excluded from heartbeats. Image engines are memory-intensive and VRAM usage fluctuates wildly during generation. Including VRAM in heartbeats would give stale data (measured 5 seconds ago) that misleads load balancing. The hub relies on `insufficient_resources` errors for backpressure instead.
+
+**Cadence.** Satellites emit a heartbeat every **5 s**. The hub marks a worker alive if a heartbeat landed within the last **15 s** (`_HB_TTL`); older entries are pruned after `2 × _HB_TTL`. No worker alive → `ImageUnavailableError("Image: no live worker (heartbeat stale >15s)")` before any request is dispatched.
+
+### LoRA handling
+
+LoRA weights are sent as **file paths**, not payload fields containing binary data:
+
+- `lora_path` is an absolute path to a `.safetensors` file on the satellite's filesystem.
+- The satellite validates the path exists before loading.
+- LoRA weights are fused into base weights before FP8 quantization (flux2-klein).
+
+**Rationale:** LoRA files range from 10 MB to 200+ MB. Base64-encoding them in the NATS payload would:
+
+1. Exceed typical `max_payload` limits (1 MB default in many NATS deployments).
+2. Serialize/deserialize overhead for every request.
+3. Duplicate the same LoRA data across requests when the same LoRA is reused.
+
+Path-based LoRA references require shared storage or pre-provisioned LoRA files on the satellite host. This is acceptable for personal deployments where the operator controls both hosts.
+
+### Large image handling
+
+Images exceeding NATS `max_payload` (e.g., 2048x2048 PNG ≈ 8–12 MB) cannot be returned as base64 in the reply. Two modes are supported:
+
+| `output_mode` | Behavior |
+|---|---|
+| `b64` (default) | Image returned as `image_b64` in reply. Fails with `generation_failed` if encoded size exceeds 75% of NATS `max_payload`. |
+| `file` | Image saved to `images/images_out/` on satellite. Reply contains `file_path` (absolute path). Hub retrieves via separate mechanism (e.g., HTTP fetch, shared volume, or rsync). |
+
+The hub client selects `output_mode` based on expected image size and deployment topology.
+
+## Rationale
+
+**Why NATS.** Image generation is GPU-bound and cannot run in the hub venv. NATS request-reply decouples the hub from the GPU worker, enabling:
+
+- Hub remains responsive during long generations.
+- Worker can run on a different host with its own GPU.
+- Queue groups enable load balancing across multiple workers (future horizontal scaling).
+
+**Why roxabi-nats SDK.** The SDK already powers the voice adapters (STT/TTS). Reusing `NatsAdapterBase` provides:
+
+- Consistent lifecycle (connect, subscribe, drain, close).
+- Built-in heartbeat publishing and envelope validation.
+- `contract_version` enforcement matching the voice contract.
+- Reduced code duplication across satellites.
+
+**Why no VRAM in heartbeat.** Image engines have highly variable VRAM profiles:
+
+- FLUX.2-klein uses 8 GB (CPU offload) to 12 GB (all-on-GPU) depending on batch size.
+- A heartbeat captured 5 seconds ago reports stale VRAM that may be 4 GB off from current reality.
+- The hub would make poor load-balancing decisions based on bad data.
+
+Instead, preflight checks on each request provide accurate, real-time VRAM validation. When VRAM is insufficient, the request fails fast with `insufficient_resources` and the hub can retry on another worker or back off.
+
+**Why LoRA as path.** LoRA files are too large for in-payload transport (see LoRA handling section). Path references are the pragmatic choice for personal deployments where the operator provisions LoRA files on the satellite host.
+
+## Consequences
+
+### Positive
+
+- Lyra can request image generation asynchronously without blocking the agent loop.
+- Image generation inherits the same operational model as voice (satellite process, NATS transport, heartbeats for liveness).
+- The contract is frozen and greppable; changes flow through ADR updates.
+- `contract_version` enables observability and future compatibility checks without wire negotiation.
+
+### Negative
+
+- LoRA support requires shared filesystem or manual provisioning on the satellite host.
+- Large images (2048x2048+) require file mode and a separate retrieval mechanism.
+- Hub has no visibility into satellite VRAM; relies on error responses for backpressure.
+
+### Neutral
+
+- Heartbeat payload is smaller without VRAM; acceptable tradeoff given staleness concerns.
+- The adapter lazy-loads engines on first request; cold start latency is inherited from imageCLI's engine design.
+
+## Relation to other ADRs
+
+- **ADR-044** — Voice NATS contract. Establishes `contract_version` conventions and heartbeat patterns that this ADR follows.
+- **ADR-039** — STT/TTS NATS adapter decoupling. Establishes the satellite-bootstrap pattern that `ImageNatsAdapter` follows.
+- **ADR-001** — Hardware capability detection in `engine.py`. ImageNatsAdapter delegates all GPU logic to `ImageEngine` subclasses.
+
+## References
+
+- Spec: `artifacts/specs/050-imagecli-nats-ingress-spec.mdx` — implementation details
+- Code:
+  - `src/imagecli/engine.py` — `ImageEngine` base class, registry, preflight checks
+  - `src/imagecli/engines/*.py` — Engine implementations
+  - `roxabi-nats` SDK (`lyra/packages/roxabi-nats/`) — `NatsAdapterBase`, connection helpers

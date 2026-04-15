@@ -3,7 +3,7 @@ name = "imagecli"
 version = "0.1.0"
 description = "Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends"
 license = "MIT"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "typer[all]>=0.12",
     "diffusers>=0.33",
@@ -20,6 +20,7 @@ dependencies = [
     "einops>=0.8.2",
     "facexlib>=0.3.0",
     "peft>=0.18.1",
+    "roxabi-nats",
 ]
 
 [project.scripts]
@@ -45,6 +46,7 @@ explicit = true
 torch = [{ index = "pytorch-cu130" }]
 torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
+roxabi-nats = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-nats", tag = "roxabi-nats/v0.1.0" }
 
 [tool.uv]
 override-dependencies = [
@@ -56,11 +58,14 @@ override-dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [
     "ruff",
     "pytest",
+    "pytest-asyncio",
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
 ]
