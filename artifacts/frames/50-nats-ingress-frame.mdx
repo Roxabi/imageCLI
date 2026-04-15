@@ -1,0 +1,44 @@
+---
+title: feat(nats): add NATS ingress via roxabi-nats v0.1.0 SDK
+issue: 50
+status: approved
+tier: F-lite
+date: 2026-04-15
+---
+
+## Problem
+
+imageCLI has no NATS surface today — image generation requests go through the direct CLI path only. Lyra, voiceCLI, and roxabi-vault communicate over a shared NATS bus using the `roxabi-nats` SDK. This issue adds NATS ingress so Lyra agents can request image generation asynchronously, consistent with the voicecli STT/TTS pattern.
+
+**Why now:** ADR-045 extraction PR mandated this follow-up as step 8 of the roxabi-nats SDK extraction checklist.
+
+## Who
+
+- **Primary:** Lyra agents — request image generation via NATS pub/sub
+- **Secondary:** imageCLI users — benefit from async generation triggered by Lyra workflows
+
+## Constraints
+
+- Must use `roxabi-nats` v0.1.0 SDK (git dependency, tag-pinned)
+- Must call `nats_connect()` — no direct `nats.connect()`
+- Must subclass `NatsAdapterBase` for lifecycle (connect, drain, disconnect)
+- Must respect `CONTRACT_VERSION` from `roxabi-nats`
+- Subject tree: `lyra.image.generate.request` / `lyra.image.generate.response`
+- Follow voiceCLI `nats-serve` pattern (Roxabi/voiceCLI#42)
+- Integration test in docker-compose (mock-hub pattern)
+
+## Out of Scope
+
+- Lyra-side publisher (`nats_image_client.py`) — separate issue TBD
+- nkey + subject ACL provisioning — infrastructure task
+- Image generation engine changes — purely ingress layer
+
+## Complexity
+
+**Tier: F-lite** — Clear scope, single domain (NATS integration), follows established voiceCLI pattern.
+
+**Signals observed:**
+- Single domain (NATS ingress)
+- Clear precedent (voiceCLI#42)
+- Well-defined acceptance criteria
+- ~5 files: CLI entry, adapter, config, test, ADR
