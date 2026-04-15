@@ -93,6 +93,8 @@ def generate(
     output_dir: str | Path | None = None,
     format: str | None = None,
     compile: bool = True,
+    lora_path: str | Path | None = None,
+    lora_scale: float = 1.0,
 ) -> Path
 ```
 
@@ -107,7 +109,7 @@ Hardcoded defaults when no config file is found: `engine="flux2-klein"`, `width=
 | Parameter | Type | Description |
 |---|---|---|
 | `prompt` | `str` | The text prompt to generate from. |
-| `engine` | `str \| None` | Engine name. One of `flux2-klein`, `flux1-dev`, `flux1-schnell`, `sd35`. |
+| `engine` | `str \| None` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
 | `width` | `int \| None` | Image width in pixels. Must be a multiple of 64. |
 | `height` | `int \| None` | Image height in pixels. Must be a multiple of 64. |
 | `steps` | `int \| None` | Number of inference steps. Ignored by `sd35` (fixed at 20) and `flux1-schnell` (fixed at 4). |
@@ -118,6 +120,8 @@ Hardcoded defaults when no config file is found: `engine="flux2-klein"`, `width=
 | `output_dir` | `str \| Path \| None` | Directory to save the image in. Filename is auto-generated as `image.{format}`, with `_1`, `_2`, etc. appended if the file already exists. |
 | `format` | `str \| None` | Output format: `png`, `jpg`, or `webp`. |
 | `compile` | `bool` | Enable `torch.compile` on the model transformer (default `True`). Set to `False` for faster startup at the cost of slower inference. |
+| `lora_path` | `str \| Path \| None` | Path to LoRA weights (`.safetensors`). Supported by `flux2-klein` and `flux2-klein-fp8`. Fused into base weights before quantization. |
+| `lora_scale` | `float` | LoRA adapter scale (default `1.0`). Higher values strengthen the LoRA effect. |
 
 **Behavior:**
 
@@ -148,7 +152,7 @@ Use this for manual control over the engine lifecycle — for example, to reuse 
 
 | Parameter | Type | Description |
 |---|---|---|
-| `name` | `str` | Engine name. One of `flux2-klein`, `flux1-dev`, `flux1-schnell`, `sd35`. |
+| `name` | `str` | Engine name. One of `flux2-klein`, `pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`, `flux1-dev`, `flux1-schnell`, `sd35`. |
 | `compile` | `bool` | Enable `torch.compile` when the engine loads (default `True`). |
 
 **Raises:**
@@ -309,12 +313,15 @@ class PromptDoc:
     guidance: float | None = None
     seed: int | None = None
     format: str | None = None
+    face_image: str | None = None
+    face_images: list[str] | None = None
+    pulid_strength: float = 0.6
     extra: dict = field(default_factory=dict)
 ```
 
 Dataclass returned by `parse_prompt_file`. All fields except `prompt` are optional and will be `None` when not specified in the frontmatter.
 
-`extra` contains any frontmatter keys not recognised by imagecli (useful for custom metadata).
+`face_image`, `face_images`, and `pulid_strength` are used by the PuLID engines (`pulid-flux2-klein`, `pulid-flux2-klein-fp4`, `pulid-flux1-dev`). `face_image` accepts a single reference image (absolute path or relative to the `.md` file's directory). `face_images` accepts a list of reference images — when present it takes precedence over `face_image`. ArcFace + EVA-CLIP embeddings are averaged across all references before `id_former`, producing a centroid identity that is more robust to pose and lighting variation. `extra` contains any frontmatter keys not recognised by imagecli (useful for custom metadata).
 
 ---
 

@@ -27,6 +27,7 @@ def test_engines_command():
     assert "flux2-klein" in result.output
     assert "flux1-dev" in result.output
     assert "sd35" in result.output
+    assert "pulid-flux2-klein-fp4" in result.output
 
 
 def test_info_command_no_cuda():
@@ -258,7 +259,9 @@ def test_run_generate_passes_callback_to_engine(tmp_path: Path):
 # ── T14: engines command capability columns ──────────────────────────────────
 
 
-def test_engines_command_shows_capability_columns():
+def test_engines_command_shows_capability_columns(monkeypatch):
+    # Rich uses COLUMNS to determine terminal width; ensure it's wide enough to avoid wrapping
+    monkeypatch.setenv("COLUMNS", "200")
     # Act
     result = runner.invoke(app, ["engines"])
 

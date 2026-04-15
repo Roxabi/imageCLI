@@ -43,7 +43,8 @@ and conversations.
 | **sm** | Streaming Multiprocessor version (e.g. `sm_120` = Blackwell). Shorthand for compute capability. | Used in quantization selection |
 | **Preflight check** | Resource validation before model loading. Checks VRAM and system RAM. Fails fast. | `engine.py:preflight_check()` |
 | **InsufficientResourcesError** | Exception raised when preflight check fails. Subclasses `RuntimeError`. | `engine.py:InsufficientResourcesError` |
-| **CPU offload** | Diffusers feature that streams model layers to GPU one at a time, reducing peak VRAM. | `pipe.enable_model_cpu_offload()` |
+| **CPU offload** | Diffusers feature that streams model layers to GPU one at a time, reducing peak VRAM. Used by single-image generation on all engines. Batch mode on `flux2-klein` uses 2-phase encoding instead. | `pipe.enable_model_cpu_offload()` |
+| **Two-phase batch** | Batch strategy where Phase 1 encodes all prompts with the text encoder on GPU, then Phase 2 generates all images with transformer + VAE. Avoids repeated CPU offload overhead. Enabled per-engine via `supports_two_phase = True`. | `cli.py:_batch_two_phase()` |
 | **VRAM cap** | Limits PyTorch to 85% of GPU memory, leaving headroom for CUDA runtime. | `torch.cuda.set_per_process_memory_fraction(0.85)` |
 | **Cleanup** | Free GPU memory after generation: `torch.cuda.empty_cache()` + `gc.collect()`. | `ImageEngine.cleanup()` |
 

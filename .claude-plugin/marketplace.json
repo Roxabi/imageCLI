@@ -1,0 +1,17 @@
+{
+  "name": "imagecli-marketplace",
+  "version": "1.0.0",
+  "description": "Claude Code plugin for imageCLI — local AI image generation.",
+  "owner": {
+    "name": "Roxabi",
+    "url": "https://github.com/Roxabi"
+  },
+  "plugins": [
+    {
+      "name": "image-cli",
+      "description": "Generate images with imageCLI — engine selection, prompt authoring, batch workflows, and VRAM-aware generation on local GPU.",
+      "source": "./",
+      "category": "tools"
+    }
+  ]
+}

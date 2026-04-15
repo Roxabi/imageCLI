@@ -54,10 +54,22 @@ class ImageEngine(ABC):
     vram_gb: float  # approximate minimum VRAM
     capabilities: ClassVar[EngineCapabilities] = EngineCapabilities()
 
-    def __init__(self, *, compile: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        compile: bool = True,
+        lora_path: str | None = None,
+        lora_scale: float = 1.0,
+        trigger: str | None = None,
+        embedding_path: str | None = None,
+    ) -> None:
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
+        self.lora_path = lora_path
+        self.lora_scale = lora_scale
+        self.trigger = trigger
+        self.embedding_path = embedding_path
 
     @abstractmethod
     def _load(self) -> None:
@@ -108,11 +120,16 @@ class ImageEngine(ABC):
         **kwargs,
     ) -> Path:
         """Generate an image and save it to output_path. Returns the saved path."""
+        import random
+
         import torch
 
         self._load()
 
-        generator = torch.Generator("cuda").manual_seed(seed) if seed is not None else None
+        # Auto-generate seed when none provided — ensures reproducibility
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        generator = torch.Generator("cuda").manual_seed(seed)
 
         pipe_kwargs = self._build_pipe_kwargs(
             prompt,
@@ -133,9 +150,72 @@ class ImageEngine(ABC):
             result = self._pipe(**pipe_kwargs)
 
         image = result.images[0]
+        return self._save_image(
+            image,
+            output_path,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
+        )
+
+    def _save_image(
+        self,
+        image,
+        output_path: Path,
+        *,
+        seed: int,
+        steps: int,
+        guidance: float,
+        width: int,
+        height: int,
+    ) -> Path:
+        """Save image with PNG metadata for reproducibility."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(str(output_path))
+        from PIL.PngImagePlugin import PngInfo
+
+        png_meta = PngInfo()
+        png_meta.add_text("seed", str(seed))
+        png_meta.add_text("engine", self.name)
+        png_meta.add_text("steps", str(steps))
+        png_meta.add_text("guidance", str(guidance))
+        png_meta.add_text("width", str(width))
+        png_meta.add_text("height", str(height))
+        image.save(str(output_path), pnginfo=png_meta)
         return output_path
+
+    # ── 2-phase batch interface ───────────────────────────────────────────
+    # Override in engines that benefit from splitting encoding and generation
+    # into separate GPU phases (e.g. flux2-klein).
+    supports_two_phase: ClassVar[bool] = False
+
+    def load_for_encode(self) -> None:
+        """Phase 1 setup: load pipeline and move text encoder to GPU."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def encode_prompt(self, prompt: str) -> dict:
+        """Encode a single prompt. Returns an opaque dict for generate_from_embeddings()."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def start_generation_phase(self) -> None:
+        """Transition: offload encoder, move transformer + VAE to GPU, compile."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+    def generate_from_embeddings(
+        self,
+        embeddings: dict,
+        *,
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 50,
+        guidance: float = 4.0,
+        seed: int | None = None,
+        output_path: Path,
+        callback: Callable[..., dict] | None = None,
+    ) -> Path:
+        """Generate image from pre-computed prompt embeddings."""
+        raise NotImplementedError(f"{self.name} does not support 2-phase batch")
 
     def _finalize_load(self, pipe: object) -> None:
         """Move pipeline to GPU and apply optimizations. Raises if VRAM is insufficient."""
@@ -152,8 +232,12 @@ class ImageEngine(ABC):
             pipe.to("cuda")
         self._optimize_pipe(pipe)
 
-    def _optimize_pipe(self, pipe: object) -> None:
-        """Apply performance optimizations to a loaded pipeline."""
+    def _optimize_pipe(self, pipe: object, *, compile: bool | None = None) -> None:
+        """Apply performance optimizations to a loaded pipeline.
+
+        compile=False overrides self._compile (use when CPU offload hooks are active,
+        since torch.compile is incompatible with enable_model_cpu_offload).
+        """
         global _tf32_set  # noqa: PLW0603
         import torch
 
@@ -168,7 +252,8 @@ class ImageEngine(ABC):
             pipe.vae.enable_slicing()
 
         # torch.compile — fuses kernels for 20-40% speedup after first-run warmup
-        if self._compile and not self._compiled:
+        should_compile = self._compile if compile is None else compile
+        if should_compile and not self._compiled:
             compilable = None
             if hasattr(pipe, "transformer"):
                 compilable = pipe.transformer
@@ -233,6 +318,41 @@ class ImageEngine(ABC):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
+
+    def _apply_pivotal_embeddings(self) -> None:
+        """Load and apply pivotal tuning embeddings onto ``self._pipe``.
+
+        No-op when neither ``lora_path`` nor ``embedding_path`` is set. Must be
+        called AFTER the LoRA has been fused/unloaded (if any) and BEFORE the
+        transformer is quantized or moved to GPU — the TE should still be on
+        CPU in bf16, and the transformer's nn.Linear layers should still be
+        unquantized (the pivotal path touches nn.Embedding in the TE only, so
+        this is safe, but the ordering keeps all write-mutations in a single
+        bf16 phase).
+
+        Hook point for flux2-klein (quanto), flux2-klein-fp4 (NVFP4 runtime
+        quantize), and flux2-klein-fp8 (torchao). Other engine families that
+        do not inherit the LoRA+pivotal surface simply never call this.
+        """
+        if not (self.lora_path or self.embedding_path):
+            return
+        # Local imports to keep torch/safetensors out of the base class import
+        # path for engines that do not use pivotal tuning.
+        from imagecli.pivotal import (
+            _patch_encode_prompt,
+            apply_pivotal_to_pipe,
+            load_pivotal_embedding,
+        )
+
+        pivotal = load_pivotal_embedding(
+            self.lora_path,
+            self.trigger,
+            embedding_path=self.embedding_path,
+            te_hidden_size=self._pipe.text_encoder.config.hidden_size,
+        )
+        if pivotal is not None:
+            apply_pivotal_to_pipe(self._pipe, pivotal)
+            _patch_encode_prompt(self._pipe)
 
 
 def preflight_check(engine: ImageEngine) -> None:
@@ -325,22 +445,46 @@ def _get_registry() -> dict[str, type[ImageEngine]]:
     from imagecli.engines.flux1_dev import Flux1DevEngine
     from imagecli.engines.flux1_schnell import Flux1SchnellEngine
     from imagecli.engines.flux2_klein import Flux2KleinEngine
+    from imagecli.engines.flux2_klein_fp4 import Flux2KleinFP4Engine
+    from imagecli.engines.flux2_klein_fp8 import Flux2KleinFP8Engine
+    from imagecli.engines.pulid_flux1_dev import PuLIDFlux1DevEngine
+    from imagecli.engines.pulid_flux2_klein import PuLIDFlux2KleinEngine
+    from imagecli.engines.pulid_flux2_klein_fp4 import PuLIDFlux2KleinFP4Engine
     from imagecli.engines.sd35 import SD35Engine
 
     return {
         "flux2-klein": Flux2KleinEngine,
+        "flux2-klein-fp8": Flux2KleinFP8Engine,
+        "flux2-klein-fp4": Flux2KleinFP4Engine,
+        "pulid-flux2-klein": PuLIDFlux2KleinEngine,
+        "pulid-flux2-klein-fp4": PuLIDFlux2KleinFP4Engine,
         "flux1-dev": Flux1DevEngine,
+        "pulid-flux1-dev": PuLIDFlux1DevEngine,
         "flux1-schnell": Flux1SchnellEngine,
         "sd35": SD35Engine,
     }
 
 
-def get_engine(name: str, *, compile: bool = True) -> ImageEngine:
+def get_engine(
+    name: str,
+    *,
+    compile: bool = True,
+    lora_path: str | None = None,
+    lora_scale: float = 1.0,
+    trigger: str | None = None,
+    embedding_path: str | None = None,
+) -> ImageEngine:
     registry = _get_registry()
     if name not in registry:
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
-    return registry[name](compile=compile)
+    return registry[name](
+        compile=compile,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+        trigger=trigger,
+        embedding_path=embedding_path,
+    )
 
 
 def list_engines() -> list[dict]:
