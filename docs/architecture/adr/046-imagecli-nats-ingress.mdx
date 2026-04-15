@@ -29,6 +29,14 @@ This ADR freezes the NATS contract between Lyra (hub) and imageCLI (satellite), 
 
 ## Decision
 
+### Python version
+
+This ADR assumes Python 3.12 (`requires-python = ">=3.12,<3.13"`). Rationale:
+
+- **Blackwell support:** RTX 5070 Ti (sm_120) requires PyTorch 2.11+ with CUDA 13.0, which has best compatibility with Python 3.12.
+- **Consistency:** The Roxabi stack (lyra, voiceCLI, roxabi-nats) standardized on 3.12 for Blackwell support.
+- **No backport needed:** The NATS satellite runs on the dev host (ROXABITOWER), not on older Ampere hardware.
+
 ### Architecture
 
 `ImageNatsAdapter` subclasses `NatsAdapterBase` from the `roxabi-nats` SDK. It runs as a standalone supervisor process (`imagecli_gen`), subscribes to `lyra.image.generate.request`, and responds to the reply-to inbox. The hub never imports imageCLI — this process does.
