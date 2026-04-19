@@ -254,11 +254,12 @@ def test_maybe_convert_prompt_double_expansion_warns(caplog):
     tok = _make_tok_with_added(
         ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
     )
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="imagecli.pivotal_apply"):
         out = _maybe_convert_prompt("lyraface lyraface_1 cat", tok)
     # Should NOT double-expand
     assert out == "lyraface lyraface_1 cat"
     assert "double-expansion" in caplog.text.lower()
+    assert any(r.name == "imagecli.pivotal_apply" for r in caplog.records)
 
 
 def test_maybe_convert_prompt_substring_collision():
@@ -525,6 +526,25 @@ def test_load_pivotal_embedding_standalone_missing_file(tmp_path: Path):
             trigger="lyraface",
             embedding_path=ghost,
         )
+
+
+# ── Shim re-export surface ────────────────────────────────────────────────
+
+
+def test_shim_reexports_are_identical():
+    """`imagecli.pivotal` is a re-export shim over `pivotal_load` + `pivotal_apply`.
+    Assert every re-exported symbol resolves to the same object as its source
+    module — catches silent drift (e.g. a symbol moved between sub-modules
+    without updating the shim, or the shim deleted entirely).
+    """
+    from imagecli import pivotal, pivotal_apply, pivotal_load
+
+    assert pivotal.PivotalEmbedding is pivotal_load.PivotalEmbedding
+    assert pivotal.detect_pivotal_in_lora is pivotal_load.detect_pivotal_in_lora
+    assert pivotal.load_pivotal_embedding is pivotal_load.load_pivotal_embedding
+    assert pivotal.apply_pivotal_to_pipe is pivotal_apply.apply_pivotal_to_pipe
+    assert pivotal._maybe_convert_prompt is pivotal_apply._maybe_convert_prompt
+    assert pivotal._patch_encode_prompt is pivotal_apply._patch_encode_prompt
 
 
 # ── Integration sentinel: Flux2KleinPipeline class structure ──────────────

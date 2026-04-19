@@ -30,8 +30,9 @@ def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
     Raises:
       ValueError: if the trigger or its suffixes already exist in the
         tokenizer vocabulary.
-      AssertionError: if the round-trip read-back does not match the source
-        vectors within ``atol=1e-2`` (bf16 precision bound).
+      RuntimeError: if the round-trip read-back does not match the source
+        vectors within ``atol=5e-2`` (bf16 precision bound). Intentionally
+        ``raise`` rather than ``assert`` so the guard survives ``python -O``.
     """
     import torch
 

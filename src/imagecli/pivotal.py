@@ -26,7 +26,6 @@ from imagecli.pivotal_apply import (
 )
 from imagecli.pivotal_load import (
     PivotalEmbedding,
-    _validate,
     detect_pivotal_in_lora,
     load_pivotal_embedding,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "PivotalEmbedding",
     "_maybe_convert_prompt",
     "_patch_encode_prompt",
-    "_validate",
     "apply_pivotal_to_pipe",
     "detect_pivotal_in_lora",
     "load_pivotal_embedding",
