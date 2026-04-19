@@ -68,6 +68,7 @@ dev = [
     "pytest-asyncio",
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
+    "import-linter>=2.0,<3.0",
 ]
 fp8 = [
     "torchao>=0.17.0",
