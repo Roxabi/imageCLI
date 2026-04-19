@@ -1,0 +1,10 @@
+# Exemptions — file_length gate
+# Format: <path> <issue-url>  (single-space separator)
+# Each entry MUST reference a tracking issue so the exemption is recoverable.
+src/imagecli/cli.py https://github.com/Roxabi/imageCLI/issues/54
+src/imagecli/engines/pulid_flux1_dev.py https://github.com/Roxabi/imageCLI/issues/55
+src/imagecli/engines/pulid_flux2_klein.py https://github.com/Roxabi/imageCLI/issues/56
+src/imagecli/engine.py https://github.com/Roxabi/imageCLI/issues/57
+src/imagecli/engines/flux2_klein_fp4.py https://github.com/Roxabi/imageCLI/issues/58
+src/imagecli/daemon.py https://github.com/Roxabi/imageCLI/issues/59
+src/imagecli/nats/adapter.py https://github.com/Roxabi/imageCLI/issues/60
