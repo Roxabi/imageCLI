@@ -1,0 +1,68 @@
+---
+title: Install quality_gates guards + exempt oversized files
+issue: 53
+status: approved
+tier: F-lite
+date: 2026-04-19
+---
+
+## Problem
+
+The dev-core `quality_gates` feature (Roxabi/roxabi-plugins#115) ships canonical
+guards for file length, folder size, and import layering. Every Roxabi Python
+repo is expected to adopt it from a single source under
+`plugins/dev-core/tools/`. `imageCLI` has none of it wired up today:
+
+- No `tools/check_file_length.sh` / `check_folder_size.sh`
+- No `.importlinter` config
+- No `quality_gates:` block in `.claude/stack.yml`
+- 7 files over 300 LOC — largest is `src/imagecli/cli.py` at 807 LOC; several
+  engine files sit in the 500+ LOC range
+
+Without the guards in place, oversized files and cross-layer imports keep
+growing silently, and `imageCLI` drifts away from the rest of the Roxabi
+fleet's quality baseline.
+
+## Who
+
+- **Primary:** Mickael (sole maintainer) — gets pre-commit enforcement of the
+  same guards already running in other Roxabi repos.
+- **Secondary:** Future contributors + any downstream repo that consumes
+  `imageCLI` — consistent quality standard with the rest of the fleet.
+
+## Constraints
+
+- Canonical source: `plugins/dev-core/tools/` from
+  Roxabi/roxabi-plugins#115 — diff-clean against upstream
+- Use the `/release-setup --force` cookbook ([quality-gates.md](https://github.com/Roxabi/roxabi-plugins/blob/staging/plugins/dev-core/skills/release-setup/cookbooks/quality-gates.md))
+  for the mechanical work — do not hand-roll
+- Every exemption in `tools/file_exemptions.txt` /
+  `tools/folder_exemptions.txt` must carry a tracking-issue URL
+- `import-linter>=2.0,<3.0` pinned in `[dependency-groups].dev`
+- Three pre-commit hooks wired **after** `id: typecheck`
+- `pre-commit run --all-files` must pass on a clean checkout before merge
+- Python 3.12 + `uv` toolchain unchanged
+
+## Out of Scope
+
+- Splitting `src/imagecli/cli.py` (807 LOC) — tracked via a new sub-issue,
+  referenced from `file_exemptions.txt`
+- Splitting oversized engine files (500+ LOC) — each gets its own sub-issue
+  if not split immediately in this PR
+- Any change to engine behavior or CLI surface
+- Adjusting the `quality_gates` thresholds themselves (defaults come from
+  the canonical cookbook)
+
+## Complexity
+
+**Tier: F-lite** — mechanical install driven by an upstream cookbook,
+scoped to infra/config files in a single repo. Judgment needed only for
+the per-engine split-vs-exempt audit and the sub-issues it spawns.
+
+Signals observed:
+- Single domain (infra/config)
+- Clear scope with upstream canonical source
+- Touches ~6–8 files (`.claude/stack.yml`, `tools/*.sh`, `tools/*_exemptions.txt`,
+  `.importlinter`, `.pre-commit-config.yaml`, `pyproject.toml`)
+- No new architecture, no new patterns
+- Issue labels: `chore`, `infra` (no size label)
