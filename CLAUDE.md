@@ -2,270 +2,135 @@
 
 # imageCLI
 
-Unified CLI for local image generation. Supports FLUX.2-klein-4B, FLUX.1-dev, FLUX.1-schnell, and Stable Diffusion 3.5 Large Turbo backends via HuggingFace Diffusers.
+Local image gen CLI — FLUX.2-klein-4B, FLUX.1-dev/schnell, SD3.5 Large Turbo (HF Diffusers).
 
-## Tech Stack
-
-- Python 3.12, managed with `uv`
-- CLI framework: Typer + Rich
-- Inference: HuggingFace `diffusers` + `optimum[quanto]` for fp8/int8 quantization
-- GPU: PyTorch 2.11+ cu130 for RTX 5070 Ti (Blackwell sm_120, 16GB GDDR7); int8 fallback for Ampere (RTX 3080, sm_86)
-- Linting: `ruff` (line-length 100, target py312)
+Python 3.12 via `uv` · Typer+Rich · PyTorch 2.11+ cu130 · ruff (L≤100, py312) · GPU: RTX 5070 Ti (Blackwell sm_120 16GB) | Ampere int8 fallback (RTX 3080 sm_86).
 
 ## Engines
 
 | Engine | Model | VRAM | Notes |
 |---|---|---|---|
-| `flux2-klein` | FLUX.2-klein-4B | ~8GB | **Default, fastest.** FP8 quanto + Marlin GEMM (~7 it/s). Single: CPU offload (~8 GB). Batch: all-on-GPU (~12 GB) or `--two-phase` (~8 GB). |
-| `flux2-klein-fp8` | FLUX.2-klein-4B FP8 | ~13GB | torchao FP8 weight-only (~4.3 it/s). **~40% slower** than quanto (dequant overhead). torch.compile compatible. `uv sync --group fp8` |
-| `flux2-klein-fp4` | FLUX.2-klein-4B NVFP4 | ~11.5GB | Blackwell FP4 via comfy-kitchen (~6.8 it/s). ~2 GB transformer. Requires sm_120+ cu130. `uv sync --group fp4` |
-| `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9–10GB | Face identity lock. Requires `face_image` frontmatter + PuLID weights. `uv sync --extra pulid` |
-| `pulid-flux1-dev` | FLUX.1-dev + PuLID | ~10GB | GGUF Q5_K_S + PuLID v0.9.1 face lock. 24 steps, 1024x1024. Requires `face_image` frontmatter |
-| `flux1-dev` | FLUX.1-dev | ~10GB | fp8 (sm≥89) or int8 (Ampere) via optimum-quanto. Excellent quality |
-| `flux1-schnell` | FLUX.1-schnell | ~10GB | fp8/int8 quantized. Apache 2.0, ungated. Fast 4-step generation |
-| `sd35` | SD3.5 Large Turbo | ~14GB | Fast 20-step CFG-free. T5 encoder quantized to int8 |
+| `flux2-klein` | FLUX.2-klein-4B | ~8GB | **Default, fastest.** FP8 quanto + Marlin GEMM (~7 it/s). Single: CPU offload (~8GB). Batch: all-on-GPU (~12GB) ∨ `--two-phase` (~8GB). |
+| `flux2-klein-fp8` | FLUX.2-klein-4B FP8 | ~13GB | torchao FP8 weight-only (~4.3 it/s). ~40% slower vs quanto (dequant overhead). `torch.compile` compatible. `uv sync --group fp8` |
+| `flux2-klein-fp4` | FLUX.2-klein-4B NVFP4 | ~11.5GB | Blackwell FP4 via comfy-kitchen (~6.8 it/s). ~2GB transformer. Req sm_120+ cu130. `uv sync --group fp4` |
+| `pulid-flux2-klein` | FLUX.2-klein-4B + PuLID | ~9-10GB | Face identity lock. Req `face_image` frontmatter + PuLID weights. `uv sync --extra pulid` |
+| `pulid-flux1-dev` | FLUX.1-dev + PuLID | ~10GB | GGUF Q5_K_S + PuLID v0.9.1. 24 steps, 1024². Req `face_image` frontmatter |
+| `flux1-dev` | FLUX.1-dev | ~10GB | fp8 (sm≥89) ∨ int8 (Ampere) via optimum-quanto. Excellent quality |
+| `flux1-schnell` | FLUX.1-schnell | ~10GB | fp8/int8. Apache 2.0, ungated. Fast 4-step |
+| `sd35` | SD3.5 Large Turbo | ~14GB | 20-step CFG-free. T5 int8 |
 
 ## Project Layout
 
 ```
-imagecli.example.toml     — copy to ~/imagecli.toml and customize
+imagecli.example.toml     — copy → ~/imagecli.toml
 images/
-  prompts_in/             — .md prompt files (tracked in git)
-  images_out/             — generated images (gitignored)
+  prompts_in/             — .md prompts (git-tracked)
+  images_out/             — generated (gitignored)
 src/imagecli/
   cli.py                  — Typer app: generate, batch, engines, info
-  config.py               — TOML config loader (walks up from CWD to $HOME)
-  engine.py               — Abstract ImageEngine base class + registry
-  markdown.py             — YAML frontmatter parser for .md prompt files
+  config.py               — TOML loader (walks CWD → $HOME)
+  engine.py               — `ImageEngine` ABC + registry
+  markdown.py             — YAML frontmatter parser
+  daemon.py               — NATS adapter / socket daemon (`imagecli serve`)
   engines/
-    flux2_klein.py        — FLUX.2-klein-4B engine (default, quanto FP8)
-    flux2_klein_fp8.py    — FLUX.2-klein-4B torchao FP8 (40% slower than quanto, torch.compile compatible)
-    flux2_klein_fp4.py    — FLUX.2-klein-4B NVFP4 (Blackwell FP4 via comfy-kitchen)
-    pulid_flux2_klein.py  — FLUX.2-klein-4B + PuLID face identity lock (optional extra)
-    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1 face identity lock
-    flux1_dev.py          — FLUX.1-dev quantized engine (fp8 on sm≥89, int8 on Ampere)
-    flux1_schnell.py      — FLUX.1-schnell quantized engine (fp8 on sm≥89, int8 on Ampere)
-    sd35.py               — SD3.5 Large Turbo engine
+    flux2_klein.py        — default, quanto FP8
+    flux2_klein_fp8.py    — torchao FP8 (40% slower, torch.compile OK)
+    flux2_klein_fp4.py    — NVFP4 (Blackwell, comfy-kitchen)
+    pulid_flux2_klein.py  — Klein + PuLID face lock (extra)
+    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1
+    flux1_dev.py          — FLUX.1-dev quanto (fp8 sm≥89 | int8 Ampere)
+    flux1_schnell.py      — FLUX.1-schnell quanto
+    sd35.py               — SD3.5 Large Turbo
 ```
 
-## All CLI Commands
+## CLI (quick)
 
-```bash
-# Single generation
-imagecli generate "a cat in space"
-imagecli generate "a cat in space" -e flux1-dev
-imagecli generate "a cat in space" -e flux1-schnell
-imagecli generate "a cat in space" -e sd35
-imagecli generate prompt.md                      # from .md file with frontmatter
-imagecli generate prompt.md -e flux1-dev         # override engine
-imagecli generate "prompt" -W 1280 -H 720        # custom size
-imagecli generate "prompt" --steps 30 --guidance 4.0
-imagecli generate "prompt" --seed 42             # reproducible
-imagecli generate "prompt" -n "blurry, ugly"     # negative prompt
-imagecli generate "prompt" -o my_image.png       # custom output path
-imagecli generate "prompt" --output-dir ./out    # custom output dir
-imagecli generate "prompt" --no-compile          # skip torch.compile (faster startup)
-imagecli generate "prompt" --lora ./lora.safetensors              # LoRA weights
-imagecli generate "prompt" --lora ./lora.safetensors --lora-scale 1.5  # boosted
-
-# Batch generation (all .md files in a directory)
-imagecli batch images/prompts_in/
-imagecli batch images/prompts_in/ -e flux1-dev
-imagecli batch images/prompts_in/ --output-dir ./results
-imagecli batch images/prompts_in/ --no-compile
-imagecli batch images/prompts_in/ --two-phase   # force 2-phase (lower VRAM)
-imagecli batch images/prompts_in/ --lora ./lora.safetensors       # LoRA for all images
-
-# Info
-imagecli engines     # list engines with VRAM requirements
-imagecli info        # show active config + GPU info
 ```
+imagecli generate "text" | prompt.md  [-e ENGINE] [flags...]
+imagecli batch DIR                    [-e ENGINE] [--two-phase] [flags...]
+imagecli engines | info
+```
+
+→ `docs/cli.md` — full flag reference + examples. Or `imagecli --help`.
 
 ## Markdown Prompt Format
 
 ```markdown
 ---
-engine: flux2-klein          # flux2-klein | flux2-klein-fp8 | flux2-klein-fp4 | pulid-flux2-klein | pulid-flux1-dev | flux1-dev | flux1-schnell | sd35
-width: 1024                  # pixels, multiple of 64
+engine: flux2-klein          # ∈ ENGINE set above
+width: 1024                  # multiple of 64
 height: 1024
-steps: 50                    # inference steps (sd35: always 20, schnell: default 4)
-guidance: 4.0                # CFG scale (sd35: always 1.0, schnell: always 0.0)
-seed: 42                     # optional, for reproducibility
-negative_prompt: "blurry"    # what to avoid
+steps: 50                    # sd35:20, schnell:4
+guidance: 4.0                # sd35:1.0, schnell:0.0
+seed: 42                     # optional
+negative_prompt: "blurry"
 format: png                  # png | jpg | webp
-face_image: /path/to/ref.png # pulid-flux2-klein only — reference face (abs or relative to .md file)
-pulid_strength: 0.6          # pulid-flux2-klein only — identity lock strength (default 0.6)
-lora_path: /path/to/lora.safetensors  # LoRA weights (flux2-klein, flux2-klein-fp4, flux2-klein-fp8)
-lora_scale: 1.0              # LoRA adapter scale (default 1.0, try 1.5 for stronger identity)
-trigger: lyraface            # pivotal tuning trigger word (required when LoRA contains emb_params)
-embedding_path: /path/to/emb.safetensors  # standalone pivotal embedding (optional; overrides emb_params in LoRA)
+face_image: /path/to/ref.png # pulid-* only (abs or relative to .md)
+pulid_strength: 0.6          # pulid-flux2-klein only (default 0.6)
+lora_path: /path/to/lora.safetensors  # flux2-klein, flux2-klein-fp4, flux2-klein-fp8
+lora_scale: 1.0              # default 1.0, try 1.5 for stronger identity
+trigger: lyraface            # pivotal-tuning trigger (required if LoRA has emb_params)
+embedding_path: /path/to/emb.safetensors  # standalone pivotal emb (overrides emb_params)
 ---
 
-Your prompt text here. Can be multiple paragraphs.
+Prompt text. Can be multi-paragraph.
 ```
 
-## User Config (`imagecli.toml`)
+## Config
 
-Searched by walking up from CWD to `$HOME`. Put at `~/imagecli.toml` for global defaults.
+`imagecli.toml` searched CWD → `$HOME`. Global: `~/imagecli.toml`.
+Priority: CLI flag > frontmatter > imagecli.toml > default.
 
-Priority: **CLI flag > .md frontmatter > imagecli.toml > hardcoded default**
+## flux2-klein auto-mode
+
+| Command | Mode | Peak VRAM | Compile |
+|---|---|---|---|
+| `generate` | CPU offload | ~8 GB | No |
+| `batch` (default) | all-on-GPU | ~12 GB | No (quanto) / Yes (fp8/fp4) |
+| `batch --two-phase` | 2-phase | ~8 GB enc → ~4 GB gen | No (quanto) / Yes (fp8/fp4) |
+
+→ `docs/performance.md` — `_optimize_pipe()`, `torch.compile` status, 2-phase details, `--no-compile`.
 
 ## Memory Safety
 
-`preflight_check(engine)` runs before every load and raises `MemoryError` (a `RuntimeError` subclass) if:
+`preflight_check(engine)` ∈ every `_load()` → raises `MemoryError` iff free VRAM < `engine.vram_gb` ∨ free RAM < `IMAGECLI_MIN_FREE_RAM_GB` (default 4.0) ∨ no CUDA. `cleanup()` ∈ `finally` post-gen.
 
-- Free VRAM < `engine.vram_gb` (checked via `torch.cuda.mem_get_info`)
-- Free system RAM < `IMAGECLI_MIN_FREE_RAM_GB` env var (default `4.0`, reads `/proc/meminfo`)
-- No CUDA GPU detected
-
-`cleanup()` is called in a `finally` block after every generation: `torch.cuda.empty_cache()` + `gc.collect()`.
-
-## Performance
-
-`_optimize_pipe(pipe, compile=...)` is called once during `_load()` on every engine:
-
-- `torch.set_float32_matmul_precision("high")` — TF32 tensor cores on Blackwell (~10-15% speedup)
-- `pipe.vae.enable_tiling()` + `pipe.vae.enable_slicing()` — reduces peak VRAM for large images
-- `torch.compile(transformer, mode="max-autotune-no-cudagraphs")` — kernel fusion (~20-40% speedup after first-run warmup); skipped with `--no-compile` or `compile=False`
-- All inference runs under `torch.inference_mode()`
-
-`--no-compile` disables `torch.compile` on both `generate` and `batch`. Use it for faster startup or when testing.
-
-### flux2-klein: Automatic Mode Selection
-
-`flux2-klein` uses different VRAM strategies depending on the command:
-
-| Command | Mode | Peak VRAM | Compile | Why |
-|---------|------|-----------|---------|-----|
-| `generate` | CPU offload | ~8 GB | No | Faster for 1-2 images — no compile warmup, no GPU load overhead |
-| `batch` | All-on-GPU (default) | ~12 GB | No (quanto) / Yes (fp8/fp4) | Encoder + transformer + VAE all on GPU. No phase switching. Fastest |
-| `batch --two-phase` | 2-phase | ~8 GB (encode) → ~4 GB (generate) | No (quanto) / Yes (fp8/fp4) | Lower VRAM. Use when running alongside other GPU processes |
-
-**All-on-GPU batch (default):** Encoder (~8 GB) + transformer FP8 (~3.9 GB) + VAE (~0.17 GB) all on GPU at once (~12 GB). Each prompt is encoded and generated immediately — no model shuffling.
-
-**2-phase batch (`--two-phase`):**
-1. **Phase 1 (encode):** Text encoder loaded to GPU (~8 GB). All prompts encoded, embeddings cached on CPU. Encoder offloaded.
-2. **Phase 2 (generate):** Transformer FP8 (~3.9 GB) + VAE (~0.17 GB) loaded to GPU. All images generated from cached embeddings.
-
-**torch.compile:** Works with `flux2-klein-fp8` (no QLinear patch). Blocked on `flux2-klein` (quanto QLinear contiguity patch conflicts with compile). However, quanto's Marlin FP8 GEMM kernels are already faster than torchao+compile, so compile is not a net win currently.
-
-Engines that set `supports_two_phase = True` get this optimization. Other engines (or mixed-engine batches) fall back to sequential per-image generation.
+→ `docs/memory-safety.md` — full details.
 
 ## Key Patterns
 
-- Engines are lazy-loaded — model loaded in `_load()` on first `generate()` call, not on import
-- Engine registry in `engine.py:_get_registry()` — add new engines there
-- `enable_model_cpu_offload()` used on most engines (flux2-klein uses it for `generate`, 2-phase for `batch`)
-- Adaptive quantization via `optimum-quanto`: fp8 on sm≥89 (Ada/Blackwell), int8 on Ampere (sm≥80). SD3.5 T5 always int8.
-- `_get_compute_capability()` in `engine.py` detects GPU architecture for quantization selection
-- `preflight_check()` runs before `_load()` — abort early rather than OOM mid-load
-- `cleanup()` always runs in `finally` after generation (even on failure)
-- `_optimize_pipe(pipe, compile=...)` called once inside `_load()`; `_compiled` flag prevents double-compile
-- Batch mode: 2-phase for engines that `supports_two_phase` (flux2-klein), sequential for others or mixed-engine batches
-- Output files never overwrite existing ones — suffix `_1`, `_2` etc. added automatically
-- FLUX.2-klein is always the default (best quality-to-VRAM ratio for 16GB)
-- `pulid-flux2-klein` always runs with `compile=False` — `torch.compile` captures original forward methods and is incompatible with per-generation transformer patching used by PuLID
-- `pulid-flux2-klein` requires external model weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` and InsightFace AntelopeV2 at `~/ComfyUI/models/insightface/`; install deps with `uv sync --extra pulid`
-- `pulid-flux2-klein` CA loading: `from_safetensors()` remaps `pulid_ca_double.N.*` → `double_ca.N.*` and `pulid_ca_single.N.*` → `single_ca.N.*` (fixes silent random-init that `strict=False` masked). CA module counts are auto-detected from weight keys (actual weights: 5 double + 7 single).
-- `pulid-flux2-klein` dim projection: PuLID Klein v2 weights are dim=4096 (trained for Klein 9B); Klein 4B has hidden_size=3072. `_make_projections()` creates orthogonal-init `proj_up` (3072→4096) and `proj_down` (4096→3072) layers so the trained CA attention patterns are preserved. `_apply_ca()` runs `hidden_states → proj_up → trained CA → proj_down`. This differs from the iFayens ComfyUI approach, which discards all trained CA and uses random ones at 3072.
-- `pulid-flux1-dev` uses GGUF Q5_K_S for the transformer (~6 GB) + PuLID v0.9.1 (20 CA modules, dim=3072). Monkey-patches FluxTransformerBlock/FluxSingleTransformerBlock forward methods. Always runs with `compile=False`.
-- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1) and `pulid_flux2_klein_v2.safetensors` (Klein)
+- Engines lazy: load ∈ `_load()` on 1st `generate()`, ¬on import
+- Registry ∈ `engine.py:_get_registry()` — add engines there
+- `enable_model_cpu_offload()` on most (flux2-klein `generate` + 2-phase `batch`)
+- Adaptive quantization ∈ `optimum-quanto`: fp8 (sm≥89 Ada/Blackwell) | int8 (Ampere sm≥80). SD3.5 T5 always int8.
+- `_get_compute_capability()` ∈ `engine.py` detects GPU arch for quant selection
+- `preflight_check()` pre-`_load()` — abort early, ¬OOM mid-load
+- `cleanup()` ∈ `finally` post-gen (even on failure)
+- `_optimize_pipe(pipe, compile=...)` ∈ `_load()` once; `_compiled` flag ¬double-compile
+- Batch mode: 2-phase iff `supports_two_phase` (flux2-klein), else sequential
+- Output: never overwrite existing — auto-suffix `_1`, `_2`, …
+- Default: `flux2-klein` — best quality/VRAM @ 16GB
+- `pulid-flux2-klein` always `compile=False` (captures forward methods, ¬compatible w/ per-gen patching)
+- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/ComfyUI/models/insightface/`
+
+→ `docs/pulid-internals.md` — CA remapping, dim projection (3072↔4096), GGUF details.
 
 ## Benchmark
 
-Run these to record real VRAM and wall-clock numbers. Each generation prints `Peak VRAM (inference): X.XX GB` automatically.
+Measured: RTX 5070 Ti, Apr 2026. Summary: `quanto FP8` fastest @ 512² (7.05 it/s); `NVFP4 --two-phase` wins everything @ 1024²+ (only engine that fits 2048²).
 
-```bash
-# Smoke test (one image per engine)
-imagecli generate "a white cat on a red chair" -e flux2-klein --seed 42
-imagecli generate "a white cat on a red chair" -e flux2-klein-fp8 --seed 42
-imagecli generate "a white cat on a red chair" -e flux2-klein-fp4 --seed 42  # Blackwell only
-imagecli generate face_prompt.md               -e pulid-flux2-klein  # needs face_image frontmatter
-imagecli generate face_prompt.md -e pulid-flux1-dev --no-compile  # needs face_image frontmatter
-imagecli generate "a white cat on a red chair" -e flux1-dev   --seed 42
-imagecli generate "a white cat on a red chair" -e flux1-schnell --seed 42
-imagecli generate "a white cat on a red chair" -e sd35        --seed 42
-
-# Full batch benchmark
-imagecli batch images/prompts_in/ -e flux2-klein  --output-dir images/images_out/benchmark/klein
-imagecli batch images/prompts_in/ -e flux1-dev    --output-dir images/images_out/benchmark/dev
-imagecli batch images/prompts_in/ -e flux1-schnell --output-dir images/images_out/benchmark/schnell
-imagecli batch images/prompts_in/ -e sd35         --output-dir images/images_out/benchmark/sd35
-```
-
-GPU support matrix:
-
-| Engine | RTX 5070 Ti (16GB, sm_120) | RTX 3080 (10GB, sm_86) |
-|---|---|---|
-| `flux2-klein` | ✓ fp8 quanto + offload/all-on-GPU/2-phase | ✗ too large (~13GB) |
-| `flux2-klein-fp8` | ✓ torchao FP8 (slower than quanto) | ✗ too large |
-| `flux2-klein-fp4` | ✓ NVFP4 via comfy-kitchen (sm_120+ cu130) | ✗ requires sm_120+ |
-| `pulid-flux2-klein` | ✓ bf16 + cpu_offload | ✗ too large |
-| `pulid-flux1-dev` | ✓ GGUF Q5_K_S + PuLID | ✗ too large |
-| `flux1-dev` | ✓ fp8 | ✓ int8 |
-| `flux1-schnell` | ✓ fp8 | ✓ int8 |
-| `sd35` | ✓ int8 T5 | ✗ too large (~14GB) |
-
-### Measured Results (RTX 5070 Ti, 512x512, 28 steps, April 2026)
-
-**Single image (cold start — includes model load):**
-
-| Engine | Total wall-clock | Steady it/s | Peak VRAM |
-|--------|-----------------|------------|-----------|
-| quanto FP8 (CPU offload) | 28.5s | 7.05 | 7.84 GB |
-| **NVFP4 (all-on-GPU)** | **15.2s** | 6.8 | 11.46 GB |
-
-**Batch (model already loaded):**
-
-| Engine | Mode | Steady it/s | Gen VRAM | Free VRAM |
-|--------|------|------------|----------|-----------|
-| quanto FP8 | all-on-GPU | **7.0** | 12.26 GB | 3.2 GB |
-| quanto FP8 | --two-phase | 6.95 | 4.93 GB | 10.5 GB |
-| NVFP4 | all-on-GPU | 6.78 | 11.14 GB | 4.3 GB |
-| NVFP4 | --two-phase | 6.72 | **3.56 GB** | **11.9 GB** |
-| torchao FP8 | all-on-GPU | 4.34 | 12.75 GB | 2.7 GB |
-
-Multi-image per step (batch_size 2-4): zero speedup at 512x512 — GPU already compute-saturated.
-
-**Resolution scaling:**
-
-| Resolution | quanto FP8 best | NVFP4 best | Notes |
-|-----------|----------------|------------|-------|
-| 512x512 | **7.05 it/s** (all-on-GPU) | 6.78 it/s | quanto fastest at low res |
-| 1024x1024 | 2.02 it/s (two-phase, 8.30 GB) | **2.13 it/s** (two-phase, 7.44 GB) | NVFP4 faster + less VRAM |
-| 2048x2048 | OOM (all modes) | **0.41 it/s** (two-phase, 8.82 GB) | **NVFP4 only engine that fits** |
-
-**Which engine to pick:**
-
-| Scenario | Best pick | Why |
-|----------|----------|-----|
-| 1 image (any res) | **NVFP4** | Half the cold start (15s vs 28s) — no runtime quantization |
-| Batch 512x512 | **quanto FP8 all-on-GPU** | Fastest steady-state (7.0 it/s) |
-| Batch 1024x1024 | **NVFP4 --two-phase** | Faster (2.13 vs 2.02 it/s) and less VRAM (7.44 vs 8.30 GB) |
-| Batch 2048x2048 | **NVFP4 --two-phase** | Only option that fits in 16 GB (8.82 GB peak) |
-| 500+ sharing GPU | **NVFP4 --two-phase** | Only 3.56 GB during gen at 512x512, 12 GB free for Qwen/other |
-
-**Key findings:**
-- **quanto FP8 + Marlin GEMM is fastest at 512x512** — native FP8 matmul, no dequant overhead
-- **NVFP4 wins at 1024x1024+** — smaller transformer (~2 GB vs ~4 GB) leaves more VRAM for latents
-- **NVFP4 is the only engine for 2048x2048** — quanto OOMs in all modes
-- **NVFP4 wins cold start** — pre-quantized weights load in ~7s vs ~20s for quanto runtime quantization
-- **NVFP4 --two-phase is the VRAM champion** — 3.56 GB during generation at 512x512, 7.44 GB at 1024x1024
-- **torchao FP8 is 40% slower** — weight-only FP8 dequantizes to bf16 per matmul
-- **--two-phase is free** — same speed as all-on-GPU, just lower VRAM during generation
-- **torch.compile is a dead end** — quanto's QLinear patch blocks it; torchao unblocks it but is already slower
+→ `docs/benchmark.md` — smoke/batch commands, GPU support matrix, measured results, resolution scaling, engine-pick decision table, key findings.
 
 ## LoRA
 
-LoRA training uses [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit/) externally. LoRA inference is supported on `flux2-klein` and `flux2-klein-fp8` via `--lora` flag or `lora_path` frontmatter. LoRA weights are fused into base weights before FP8 quantization.
+Training: [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit/) externally.
+Inference: `flux2-klein` ∨ `flux2-klein-fp8` via `--lora` | `lora_path`. Fused into base pre-FP8 quant.
+Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
 
-**Reference:** `docs/lora.md` — training config, load order details, tuning levers.
-
-**Supported engines:** `flux2-klein` (quanto FP8), `flux2-klein-fp8` (torchao FP8). FP4 (pre-quantized weights) is not supported.
+→ `docs/lora.md` — config, load order, tuning.
 
 ## Conventions
 
-- No over-engineering — thin CLI, flat and simple
-- Heavy imports (torch, diffusers) deferred to engine `_load()` methods
-- Output images go to `images/images_out/` by default
-- Prompt files authored in `images/prompts_in/`
+- ¬over-engineering — thin flat CLI
+- Heavy imports (torch, diffusers) deferred to engine `_load()`
+- Output → `images/images_out/` default · prompts → `images/prompts_in/`
