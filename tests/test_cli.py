@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from imagecli.cli import _resolve_output, app
+from imagecli._utils import resolve_output as _resolve_output
+from imagecli.cli import app
 
 runner = CliRunner()
 
@@ -119,7 +120,7 @@ def test_resolve_output_strips_dot_from_format(tmp_path: Path):
 # ── generate command with mocked engine ─────────────────────────────────────
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_text_prompt(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "a cat in space"])
@@ -129,7 +130,7 @@ def test_generate_text_prompt(mock_run):
     assert args[0][0] == "a cat in space"  # prompt
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_with_engine_flag(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "test prompt", "-e", "flux1-dev"])
@@ -140,7 +141,7 @@ def test_generate_with_engine_flag(mock_run):
     assert args[0][2] == "flux1-dev"  # index 2 = engine_name
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_with_size_flags(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "test", "-W", "1280", "-H", "720"])
@@ -152,7 +153,7 @@ def test_generate_with_size_flags(mock_run):
     assert args[0][4] == 720  # index 4 = height
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_md_file(mock_run, tmp_path: Path):
     mock_run.return_value = Path("/fake/output.png")
     md_file = tmp_path / "prompt.md"
@@ -167,7 +168,7 @@ def test_generate_md_file(mock_run, tmp_path: Path):
     assert args[0][2] == "flux1-dev"  # index 2 = engine_name
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_explicit_output(mock_run, tmp_path: Path):
     mock_run.return_value = Path("/fake/output.png")
     custom_out = tmp_path / "custom.png"
@@ -179,7 +180,7 @@ def test_generate_explicit_output(mock_run, tmp_path: Path):
     assert args[0][9] == custom_out  # index 9 = out_path
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands.generate.run_generate")
 def test_generate_no_compile(mock_run):
     mock_run.return_value = Path("/fake/output.png")
     result = runner.invoke(app, ["generate", "test prompt", "--no-compile"])
@@ -232,7 +233,7 @@ def test_run_generate_passes_callback_to_engine(tmp_path: Path):
         patch("imagecli.engine.get_engine", return_value=mock_engine),
         patch("imagecli.engine.preflight_check"),
     ):
-        from imagecli.cli import _run_generate
+        from imagecli.commands._helpers import run_generate as _run_generate
 
         _run_generate(
             "a test prompt",
@@ -284,7 +285,7 @@ def test_engines_command_shows_capability_columns(monkeypatch):
 
 def test_generate_passes_steps_explicit_when_flag_set(tmp_path):
     """--steps flag sets steps_explicit=True in _run_generate call."""
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands.generate.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["generate", "a cat", "--steps", "30"])
         # If _run_generate was called, steps_explicit should be True
@@ -294,7 +295,7 @@ def test_generate_passes_steps_explicit_when_flag_set(tmp_path):
 
 def test_generate_passes_guidance_explicit_when_flag_set(tmp_path):
     """--guidance flag sets guidance_explicit=True in _run_generate call."""
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands.generate.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["generate", "a cat", "--guidance", "7.5"])
         if mock_run.called:
@@ -303,7 +304,7 @@ def test_generate_passes_guidance_explicit_when_flag_set(tmp_path):
 
 def test_generate_explicit_flags_false_when_no_flags():
     """No --steps/--guidance flags → explicit flags default to False."""
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands.generate.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["generate", "a cat"])
         if mock_run.called:
@@ -319,7 +320,7 @@ def test_batch_passes_negative_prompt_to_run_generate(tmp_path):
     md = tmp_path / "scene.md"
     md.write_text("---\nnegative_prompt: ugly blurry\n---\nA red ball.\n")
 
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands._batch_sequential.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["batch", str(tmp_path)])
         if mock_run.called:
@@ -341,7 +342,7 @@ def test_generate_md_steps_explicit_from_frontmatter(tmp_path):
     md = tmp_path / "prompt.md"
     md.write_text("---\nsteps: 10\n---\nA cat.\n")
 
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands.generate.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["generate", str(md)])
         if mock_run.called:
@@ -353,7 +354,7 @@ def test_generate_md_steps_explicit_false_when_not_in_frontmatter(tmp_path):
     md = tmp_path / "prompt.md"
     md.write_text("---\n---\nA cat.\n")
 
-    with patch("imagecli.cli._run_generate") as mock_run:
+    with patch("imagecli.commands.generate.run_generate") as mock_run:
         mock_run.return_value = None
         runner.invoke(app, ["generate", str(md)])
         if mock_run.called:
