@@ -1,0 +1,45 @@
+---
+title: split src/imagecli/cli.py (807 LOC) by command group
+issue: 54
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/cli.py` is 807 LOC — well over the 300 LOC `file_length` quality gate installed in #53 and currently listed as an exemption in `tools/file_exemptions.txt`. The file mixes Typer command definitions (`generate`, `batch`, `engines`, `info`, `serve`) with three batch strategy helpers (`_batch_all_on_gpu`, `_batch_two_phase`, `_batch_sequential`) that are tightly coupled to engine dispatch and CLI state. The #53 audit flagged this coupling as requiring dedicated regression testing before a split is safe.
+
+Leaving the exemption in place defeats the purpose of the gate: the largest offending file stays unchecked while smaller files are held to the 300-line rule. Splitting `cli.py` by command group makes the CLI surface easier to navigate, isolates the batch strategies for focused testing, and removes the exemption.
+
+## Who
+
+- **Primary:** imagecli maintainers editing CLI commands or batch logic — currently must scroll through 800+ LOC to find the right region, and any touch to a command risks accidentally entangling batch state.
+- **Secondary:** future contributors adding new engines or command flags — clear module boundaries lower onboarding cost.
+
+## Constraints
+
+- All current CLI commands must behave identically after the split: help text, argument parsing, error handling, exit codes unchanged.
+- `src/imagecli/cli.py` must drop below 300 LOC (so its exemption can be removed on merge).
+- Batch strategy helpers land in a dedicated batch module with clear boundaries — not just shuffled across command files.
+- Existing tests must continue to pass; add unit tests for any newly extracted helpers (per AC).
+- Module layout must fit the existing `src/imagecli/` structure — new subpackage `commands/` under it, consistent with the project's flat CLI convention (CLAUDE.md).
+- Heavy imports (`torch`, `diffusers`) stay deferred to engine `_load()` — the split must not accidentally hoist them to module top-level.
+
+## Out of Scope
+
+- Refactoring engine internals or the `ImageEngine` ABC.
+- Changing CLI UX (new flags, renamed commands, output format changes).
+- Touching the daemon/NATS adapter beyond extracting its `serve` command cleanly.
+- Reworking `config.py` or the TOML loader.
+- Adding new engines or features.
+
+## Complexity
+
+**Tier: F-lite** — single domain (CLI layer), clear scope (move-and-wire-up refactor), no architectural unknowns. Spec and plan gates are still warranted because the batch helpers are intertwined with CLI state per the #53 audit finding, so module boundaries need explicit design before code moves.
+
+Signals observed:
+- Single domain: all changes under `src/imagecli/` CLI layer.
+- No new patterns: subpackage layout is a standard Typer idiom.
+- Known risk: batch helper coupling — spec will define the seam.
+- Parent issue #53 already merged; this is a scoped follow-up.
