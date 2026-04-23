@@ -21,10 +21,12 @@ def _make_md(path: Path, engine: str = "flux2-klein", prompt: str = "test prompt
     return path
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_discovers_md_files(mock_get_engine, mock_run, tmp_path: Path):
-    mock_get_engine.return_value = MagicMock(spec=ImageEngine, cleanup=MagicMock(), supports_two_phase=False)
+    mock_get_engine.return_value = MagicMock(
+        spec=ImageEngine, cleanup=MagicMock(), supports_two_phase=False
+    )
     mock_run.return_value = Path("/fake/out.png")
 
     _make_md(tmp_path / "a.md")
@@ -36,7 +38,7 @@ def test_batch_discovers_md_files(mock_get_engine, mock_run, tmp_path: Path):
     assert mock_run.call_count == 2
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -61,7 +63,7 @@ def test_batch_caches_engine(mock_get_engine, mock_run, tmp_path: Path):
     assert mock_engine.clear_cache.call_count == 3
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_no_compile(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -89,7 +91,7 @@ def test_batch_empty_dir(tmp_path: Path):
     assert "no .md files" in result.output.lower()
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_counts_failures(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -112,7 +114,7 @@ def test_batch_counts_failures(mock_get_engine, mock_run, tmp_path: Path):
     assert "1 failed" in result.output
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_engine_override(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -135,7 +137,7 @@ def test_batch_engine_override(mock_get_engine, mock_run, tmp_path: Path):
     )
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_cleanup_called(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -150,7 +152,7 @@ def test_batch_cleanup_called(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine.cleanup.assert_called_once()
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
@@ -171,7 +173,7 @@ def test_batch_cleanup_after_failures(mock_get_engine, mock_run, tmp_path: Path)
     assert mock_engine.cleanup.call_count == 2
 
 
-@patch("imagecli.cli._run_generate")
+@patch("imagecli.commands._batch_sequential.run_generate")
 @patch("imagecli.engine.get_engine")
 def test_batch_shows_file_index(mock_get_engine, mock_run, tmp_path: Path):
     mock_engine = MagicMock(spec=ImageEngine, supports_two_phase=False)
