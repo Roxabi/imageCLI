@@ -120,6 +120,60 @@ The LoRA competes with the prompt for control of the output. At rank 16:
 
 ---
 
+## Multi-LoRA Stacking
+
+Stack multiple LoRA adapters in a single generation. All adapters are fused into the base bf16 weights before FP8 quantization — same load-time bake as single-LoRA.
+
+### Frontmatter example
+
+```yaml
+---
+engine: flux2-klein
+loras:
+  - path: /path/to/subject1.safetensors
+    trigger: lyraface
+    scale: 1.0
+  - path: /path/to/style.safetensors
+    scale: 0.8
+---
+
+lyraface person in impressionist painting style, warm afternoon light
+```
+
+Each entry maps to a `LoraSpec(path, scale, trigger, embedding_path)`. `scale` and `trigger` are optional per-adapter.
+
+### CLI example
+
+Repeat `--lora` for each adapter. Paired flags (`--lora-scale`, `--trigger`, `--embedding-path`) are matched positionally and must appear the same number of times as `--lora`, or be omitted entirely for defaults.
+
+```bash
+imagecli generate prompt.md \
+    --lora /path/to/subject1.safetensors --trigger lyraface \
+    --lora /path/to/style.safetensors --lora-scale 0.8
+```
+
+### Override policy
+
+When any `--lora*` CLI flag is set, the CLI list fully replaces the frontmatter `loras:` list (no merge). Omit CLI LoRA flags to use the frontmatter list as-is.
+
+### Pivotal atomicity
+
+When multiple LoRAs carry pivotal embeddings, all trigger tokens and trained vectors are applied in a single atomic operation: trigger-collision or vocab-collision with any LoRA's placeholders aborts before any tokenizer mutation, so either every pivotal lands or none do.
+
+### Engine support
+
+| Engine | Multi-LoRA | Notes |
+|---|---|---|
+| `flux2-klein` | Yes | quanto FP8; adapters fused pre-quantization |
+| `flux2-klein-fp8` | Yes | torchao FP8; same fuse order |
+| `flux2-klein-fp4` | **No** | NVFP4 is pre-quantized; LoRA fuse into a frozen quantized checkpoint is unsupported. Raises `ValueError` if `loras` is non-empty. |
+
+### Mixed-form error
+
+Setting both `loras:` and any singular key (`lora_path`, `lora_scale`, `trigger`, `embedding_path`) in the same source raises `ValueError`. This applies to frontmatter, engine constructor kwargs, and NATS payload. Use one form or the other — `loras:` list for multi-LoRA, singular keys for legacy single-LoRA.
+
+---
+
 ## Pivotal Tuning Inference
 
 When ai-toolkit is configured with both a `network:` (LoRA) block AND an `embedding:` (pivotal tuning) block, it trains N placeholder token embeddings alongside the transformer LoRA. Those embeddings tighten the trigger-word semantics in the text encoder — the 16 GB-feasible alternative to full TE training, which OOMs on Klein 4B's Qwen3 TE.
