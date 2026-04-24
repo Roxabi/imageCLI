@@ -59,57 +59,38 @@ class Flux2KleinFP4Engine(ImageEngine):
         if self._pipe is not None:
             return
 
+        # LoRA AND standalone-pivotal are both out of scope for NVFP4 (pre-
+        # quantized weights; TE-side embeddings without a LoRA would attach
+        # but serve no purpose on a frozen transformer).
+        if self.loras or any(spec.embedding_path for spec in self.loras):
+            raise ValueError(
+                "flux2-klein-fp4 does not support LoRA or standalone pivotal "
+                "embeddings (model is pre-quantized NVFP4). "
+                "Use flux2-klein or flux2-klein-fp8 instead."
+            )
+
         self._check_requirements()
 
         import torch
         from diffusers import Flux2KleinPipeline
         from huggingface_hub import hf_hub_download
 
-        from imagecli.engines.nvfp4_quantize import (
-            patch_transformer_nvfp4,
-            runtime_quantize_transformer_to_nvfp4,
-        )
+        from imagecli.engines.nvfp4_quantize import patch_transformer_nvfp4
 
         logger.info("Loading base pipeline %s...", BASE_REPO)
         self._pipe = Flux2KleinPipeline.from_pretrained(BASE_REPO, torch_dtype=torch.bfloat16)
 
-        if self.lora_path:
-            # LoRA path: fuse LoRA into bf16 base, then runtime-quantize the fused
-            # weights to NVFP4. Pre-quantized disk weights would overwrite the
-            # fused delta, so we bypass them entirely.
-            logger.info("Loading LoRA from %s...", self.lora_path)
-            self._pipe.load_lora_weights(self.lora_path)
-            if self.lora_scale != 1.0:
-                self._pipe.set_adapters(["default_0"], adapter_weights=[self.lora_scale])
-                logger.info("LoRA adapter scale set to %.2f", self.lora_scale)
-            self._pipe.fuse_lora()
-            self._pipe.unload_lora_weights()
-            logger.info("LoRA fused into bf16 base weights.")
+        # No LoRA: use pre-quantized BFL NVFP4 weights from the hub.
+        # (LoRA + pivotal cases are rejected by the guard above — #34 excluded
+        # fp4 from the multi-LoRA feature; the pre-#34 single-LoRA runtime-fuse
+        # path was also dropped because the guard pre-empts any LoRA request.)
+        logger.info("Downloading NVFP4 weights from %s...", NVFP4_REPO)
+        nvfp4_path = hf_hub_download(repo_id=NVFP4_REPO, filename=NVFP4_FILENAME)
 
-            # Pivotal tuning: load trigger embeddings into the TE BEFORE moving
-            # the transformer to GPU. TE is still on CPU in bf16 — disjoint from
-            # runtime NVFP4 quantization (which only touches nn.Linear layers
-            # in the transformer, not nn.Embedding in the TE).
-            self._apply_pivotal_embeddings()
-
-            self._pipe.transformer.to("cuda")
-            logger.info("Runtime-quantizing fused transformer to NVFP4...")
-            patched = runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)
-            logger.info("Runtime-quantized %d linear layers to NVFP4.", patched)
-        else:
-            # Pivotal-only path: standalone embedding file without a LoRA.
-            # Must happen before transformer.to("cuda") below, same rationale
-            # as the LoRA branch.
-            self._apply_pivotal_embeddings()
-
-            # No LoRA: use pre-quantized BFL NVFP4 weights from the hub.
-            logger.info("Downloading NVFP4 weights from %s...", NVFP4_REPO)
-            nvfp4_path = hf_hub_download(repo_id=NVFP4_REPO, filename=NVFP4_FILENAME)
-
-            self._pipe.transformer.to("cuda")
-            logger.info("Patching transformer with NVFP4 QuantizedTensors...")
-            patched = patch_transformer_nvfp4(self._pipe.transformer, nvfp4_path)
-            logger.info("Patched %d linear layers with NVFP4 weights.", patched)
+        self._pipe.transformer.to("cuda")
+        logger.info("Patching transformer with NVFP4 QuantizedTensors...")
+        patched = patch_transformer_nvfp4(self._pipe.transformer, nvfp4_path)
+        logger.info("Patched %d linear layers with NVFP4 weights.", patched)
 
     def _set_execution_device(self):
         import torch

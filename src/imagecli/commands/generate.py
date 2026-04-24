@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import typer
 
@@ -12,6 +12,7 @@ from imagecli.commands._helpers import (
     load_config,
     resolve_face_image,
     resolve_face_images,
+    resolve_loras,
     run_generate,
 )
 
@@ -39,32 +40,34 @@ def generate(
         typer.Option("--pulid-strength", help="PuLID identity lock strength (default 0.6)."),
     ] = None,
     lora: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
-            "--lora", help="Path to LoRA weights (.safetensors). Loaded before quantization."
+            "--lora", help="Path to LoRA weights (.safetensors). Repeatable for multi-LoRA."
         ),
     ] = None,
     lora_scale: Annotated[
-        Optional[float],
-        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
+        Optional[List[float]],
+        typer.Option(
+            "--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."
+        ),
     ] = None,
     trigger: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
             "--trigger",
             help=(
-                "Pivotal tuning trigger word (e.g. 'lyraface'). Required when "
-                "the LoRA was trained with ai-toolkit's 'embedding:' block. "
+                "Pivotal tuning trigger word (e.g. 'lyraface'). Pairwise with --lora. "
+                "Required when the LoRA was trained with ai-toolkit's 'embedding:' block. "
                 "See docs/lora.md for details."
             ),
         ),
     ] = None,
     embedding: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
             "--embedding",
             help=(
-                "Path to a standalone pivotal embedding (.safetensors). "
+                "Path to a standalone pivotal embedding (.safetensors). Pairwise with --lora. "
                 "Overrides emb_params in the LoRA file. See docs/lora.md."
             ),
         ),
@@ -76,6 +79,11 @@ def generate(
 ):
     """Generate an image from a prompt or .md file."""
     cfg = load_config()
+
+    cli_loras: list[str] = lora or []
+    cli_scales: list[float] = lora_scale or []
+    cli_triggers: list[str] = trigger or []
+    cli_embeddings: list[str] = embedding or []
 
     path = Path(prompt_or_file)
     if path.suffix == ".md" and path.exists():
@@ -100,10 +108,10 @@ def generate(
         )
         face_imgs = resolve_face_images(doc.face_images, path.parent)
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
-        lora_p = lora or doc.lora_path
-        lora_s = lora_scale if lora_scale is not None else doc.lora_scale
-        trig = trigger or doc.trigger
-        emb_p = embedding or doc.embedding_path
+        fm_loras = getattr(doc, "loras", [])
+        resolved_loras = resolve_loras(
+            cli_loras, cli_scales, cli_triggers, cli_embeddings, fm_loras
+        )
     else:
         prompt_text = prompt_or_file
         stem = "image"
@@ -121,10 +129,7 @@ def generate(
         face_img = resolve_face_image(face_image, Path.cwd())
         face_imgs = None
         pulid_str = pulid_strength if pulid_strength is not None else 0.6
-        lora_p = lora
-        lora_s = lora_scale if lora_scale is not None else 1.0
-        trig = trigger
-        emb_p = embedding
+        resolved_loras = resolve_loras(cli_loras, cli_scales, cli_triggers, cli_embeddings, [])
 
     if output:
         out_path = Path(output)
@@ -150,10 +155,7 @@ def generate(
         face_image=face_img,
         face_images=face_imgs,
         pulid_strength=pulid_str,
-        lora_path=lora_p,
-        lora_scale=lora_s,
-        trigger=trig,
-        embedding_path=emb_p,
+        loras=resolved_loras,
     )
 
 

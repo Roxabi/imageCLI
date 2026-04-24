@@ -17,6 +17,11 @@ from imagecli.engine_helpers import (
     logger,
     quantize_transformer,
 )
+from imagecli.lora_spec import LoraSpec
+
+# Sentinel — distinguishes "lora_scale not passed" from "lora_scale=1.0 passed
+# explicitly". Needed to detect mixed-form use alongside ``loras=``.
+_UNSET: object = object()
 
 
 class ImageEngine(TwoPhaseMixin, ABC):
@@ -30,18 +35,61 @@ class ImageEngine(TwoPhaseMixin, ABC):
         self,
         *,
         compile: bool = True,
+        loras: list[LoraSpec] | None = None,
         lora_path: str | None = None,
-        lora_scale: float = 1.0,
+        lora_scale: float | object = _UNSET,
         trigger: str | None = None,
         embedding_path: str | None = None,
     ) -> None:
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
-        self.lora_path = lora_path
-        self.lora_scale = lora_scale
-        self.trigger = trigger
-        self.embedding_path = embedding_path
+
+        singular_set = (
+            lora_path is not None
+            or trigger is not None
+            or embedding_path is not None
+            or lora_scale is not _UNSET
+        )
+        if loras is not None and singular_set:
+            raise ValueError(
+                "Pass either loras= or the singular fields "
+                "(lora_path / lora_scale / trigger / embedding_path), not both."
+            )
+
+        if loras is not None:
+            self.loras: list[LoraSpec] = list(loras)
+        elif lora_path is not None:
+            self.loras = [
+                LoraSpec(
+                    path=lora_path,
+                    scale=1.0 if lora_scale is _UNSET else float(lora_scale),  # type: ignore[arg-type]
+                    trigger=trigger,
+                    embedding_path=embedding_path,
+                )
+            ]
+        elif embedding_path is not None or trigger is not None:
+            raise ValueError(
+                "embedding_path / trigger require lora_path (pivotal embeddings "
+                "are scoped to a LoRA). Pass lora_path=... or use loras=[LoraSpec(...)]."
+            )
+        else:
+            self.loras = []
+
+        # Backward-compat singular attrs. The one-element case preserves legacy
+        # behavior for subclasses that still read them. Multi-LoRA leaves them
+        # None/1.0 — no single value is meaningful, and callers must migrate.
+        if len(self.loras) == 1:
+            spec = self.loras[0]
+            self.lora_path = spec.path
+            self.lora_scale = spec.scale
+            self.trigger = spec.trigger
+            self.embedding_path = spec.embedding_path
+        else:
+            self.lora_path = None
+            self.lora_scale = 1.0
+            self.trigger = None
+            self.embedding_path = None
 
     @abstractmethod
     def _load(self) -> None:
@@ -230,29 +278,37 @@ class ImageEngine(TwoPhaseMixin, ABC):
         gc.collect()
 
     def _apply_pivotal_embeddings(self) -> None:
-        """Load and apply pivotal tuning embeddings onto ``self._pipe``.
+        """Load and apply pivotal tuning embeddings for each LoRA in ``self.loras``.
 
-        No-op when neither ``lora_path`` nor ``embedding_path`` is set. Must be
-        called AFTER the LoRA has been fused/unloaded and BEFORE the
-        transformer is quantized or moved to GPU.
+        No-op when ``self.loras`` is empty. Must be called AFTER all LoRAs have
+        been fused/unloaded and BEFORE the transformer is quantized or moved
+        to GPU. Tokenizer mutations from all pivotals are applied atomically:
+        either every trigger is added (and every vector written) or none are,
+        so a collision on trigger #N does not leave #1..#N-1 dangling.
         """
-        if not (self.lora_path or self.embedding_path):
+        if not self.loras:
             return
         from imagecli.pivotal import (
             _patch_encode_prompt,
-            apply_pivotal_to_pipe,
+            apply_pivotals_to_pipe,
             load_pivotal_embedding,
         )
 
-        pivotal = load_pivotal_embedding(
-            self.lora_path,
-            self.trigger,
-            embedding_path=self.embedding_path,
-            te_hidden_size=self._pipe.text_encoder.config.hidden_size,
-        )
-        if pivotal is not None:
-            apply_pivotal_to_pipe(self._pipe, pivotal)
-            _patch_encode_prompt(self._pipe)
+        te_hidden_size = self._pipe.text_encoder.config.hidden_size
+        pivotals = []
+        for spec in self.loras:
+            p = load_pivotal_embedding(
+                spec.path,
+                spec.trigger,
+                embedding_path=spec.embedding_path,
+                te_hidden_size=te_hidden_size,
+            )
+            if p is not None:
+                pivotals.append(p)
+        if not pivotals:
+            return
+        apply_pivotals_to_pipe(self._pipe, pivotals)
+        _patch_encode_prompt(self._pipe)
 
 
 def preflight_check(engine: ImageEngine) -> None:

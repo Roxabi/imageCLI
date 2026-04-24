@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -16,6 +16,7 @@ from imagecli.pivotal import (
     _maybe_convert_prompt,
     _patch_encode_prompt,
     apply_pivotal_to_pipe,
+    apply_pivotals_to_pipe,
     detect_pivotal_in_lora,
     load_pivotal_embedding,
 )
@@ -120,9 +121,7 @@ def test_load_merged_format(tmp_path: Path):
 
 def test_load_standalone_format_with_explicit_trigger(tmp_path: Path):
     emb_path = _write_standalone(tmp_path / "lyraface2000.safetensors", num_tokens=4)
-    piv = load_pivotal_embedding(
-        lora_path=None, trigger="lyraface", embedding_path=emb_path
-    )
+    piv = load_pivotal_embedding(lora_path=None, trigger="lyraface", embedding_path=emb_path)
     assert piv is not None
     assert piv.trigger == "lyraface"
     assert piv.source == "standalone"
@@ -132,9 +131,7 @@ def test_load_standalone_format_with_explicit_trigger(tmp_path: Path):
 
 def test_load_standalone_format_trigger_inferred_from_metadata(tmp_path: Path):
     emb_path = _write_standalone(tmp_path / "inferred2000.safetensors", trigger="infrd")
-    piv = load_pivotal_embedding(
-        lora_path=None, trigger=None, embedding_path=emb_path
-    )
+    piv = load_pivotal_embedding(lora_path=None, trigger=None, embedding_path=emb_path)
     assert piv is not None
     assert piv.trigger == "infrd"
 
@@ -222,17 +219,13 @@ def _make_tok_with_added(tokens: list[str]):
 
 
 def test_maybe_convert_prompt_multi_vector():
-    tok = _make_tok_with_added(
-        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
-    )
+    tok = _make_tok_with_added(["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"])
     out = _maybe_convert_prompt("lyraface in space", tok)
     assert out == "lyraface lyraface_1 lyraface_2 lyraface_3 in space"
 
 
 def test_maybe_convert_prompt_no_trigger_present():
-    tok = _make_tok_with_added(
-        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
-    )
+    tok = _make_tok_with_added(["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"])
     out = _maybe_convert_prompt("just a plain prompt", tok)
     assert out == "just a plain prompt"
 
@@ -251,9 +244,7 @@ def test_maybe_convert_prompt_single_vector_no_expansion():
 
 
 def test_maybe_convert_prompt_double_expansion_warns(caplog):
-    tok = _make_tok_with_added(
-        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
-    )
+    tok = _make_tok_with_added(["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"])
     with caplog.at_level(logging.WARNING, logger="imagecli.pivotal_apply"):
         out = _maybe_convert_prompt("lyraface lyraface_1 cat", tok)
     # Should NOT double-expand
@@ -267,15 +258,12 @@ def test_maybe_convert_prompt_substring_collision():
     corrupt the longer word 'lyrafaces' when the tokenizer returns 'lyrafaces'
     as a distinct token (i.e. 'lyraface' is not in the tokenized output).
     """
-    tok = _make_tok_with_added(
-        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
-    )
+    tok = _make_tok_with_added(["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"])
     # Tokenizer mock splits on whitespace, so "lyrafaces" is one token and is
     # NOT in added_tokens_encoder → expansion should not fire.
     out = _maybe_convert_prompt("lyrafaces in space", tok)
     assert out == "lyrafaces in space", (
-        f"substring collision: 'lyrafaces' was corrupted by str.replace expansion. "
-        f"Got: {out!r}"
+        f"substring collision: 'lyrafaces' was corrupted by str.replace expansion. Got: {out!r}"
     )
 
 
@@ -284,17 +272,15 @@ def test_maybe_convert_prompt_substring_collision_when_trigger_tokenized():
     alongside a substring-containing word, the expansion must only replace
     whole tokens, not substrings inside other words.
     """
-    tok = _make_tok_with_added(
-        ["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"]
-    )
+    tok = _make_tok_with_added(["lyraface", "lyraface_1", "lyraface_2", "lyraface_3"])
     # "lyraface" is a real trigger word here, "lyrafaces" is a different token
     # that happens to contain "lyraface" as a prefix. The trigger should expand,
     # but "lyrafaces" must stay intact.
     out = _maybe_convert_prompt("lyraface and lyrafaces coexist", tok)
     # The trigger expands; "lyrafaces" is untouched.
-    assert out == (
-        "lyraface lyraface_1 lyraface_2 lyraface_3 and lyrafaces coexist"
-    ), f"substring collision during expansion: got {out!r}"
+    assert out == ("lyraface lyraface_1 lyraface_2 lyraface_3 and lyrafaces coexist"), (
+        f"substring collision during expansion: got {out!r}"
+    )
 
 
 # ── apply_pivotal_to_pipe tests (V2 RED: T2.9) ────────────────────────────
@@ -336,9 +322,7 @@ def test_apply_round_trip_assertion_passes(tmp_path: Path):
     embed_weight = pipe.text_encoder.get_input_embeddings().weight
     for i, pid in enumerate(ids):
         # bf16 round-trip: compare with loose tolerance (matches prod atol=5e-2)
-        assert torch.allclose(
-            embed_weight[pid].float().cpu(), vecs[i].float().cpu(), atol=5e-2
-        )
+        assert torch.allclose(embed_weight[pid].float().cpu(), vecs[i].float().cpu(), atol=5e-2)
 
 
 def test_apply_rejects_existing_trigger(tmp_path: Path):
@@ -409,10 +393,7 @@ def test_patch_encode_prompt_expands_string_prompt(tmp_path: Path):
     _patch_encode_prompt(pipe)
 
     pipe.encode_prompt(prompt="lyraface sitting on a bench")
-    assert (
-        recorded["prompt"]
-        == "lyraface lyraface_1 lyraface_2 lyraface_3 sitting on a bench"
-    )
+    assert recorded["prompt"] == "lyraface lyraface_1 lyraface_2 lyraface_3 sitting on a bench"
 
 
 def test_patch_encode_prompt_handles_list_input(tmp_path: Path):
@@ -497,12 +478,10 @@ def test_patch_encode_prompt_handles_positional_arg(tmp_path: Path):
     pipe.encode_prompt("lyraface cat")
 
     # The expanded prompt must arrive via args (positional), not kwargs
-    assert recorded["args"] == (
-        "lyraface lyraface_1 lyraface_2 lyraface_3 cat",
-    ), f"positional prompt was re-routed to kwargs: args={recorded['args']}, kwargs={recorded['kwargs']}"
-    assert "prompt" not in recorded["kwargs"], (
-        "positional prompt must not leak into kwargs"
+    assert recorded["args"] == ("lyraface lyraface_1 lyraface_2 lyraface_3 cat",), (
+        f"positional prompt was re-routed to kwargs: args={recorded['args']}, kwargs={recorded['kwargs']}"
     )
+    assert "prompt" not in recorded["kwargs"], "positional prompt must not leak into kwargs"
 
 
 # ── Missing-file error path tests ─────────────────────────────────────────
@@ -611,4 +590,274 @@ def test_flux2_klein_pipeline_class_structure_sentinel():
     assert issubclass(Flux2KleinPipeline, Flux2LoraLoaderMixin), (
         "Flux2KleinPipeline no longer inherits Flux2LoraLoaderMixin — "
         "the pre-pivotal LoRA fuse path may break."
+    )
+
+
+# ── apply_pivotals_to_pipe — plural atomic entry point (#34) ─────────────────
+
+
+def _make_pivotal(trigger: str, num_tokens: int = 4, hidden: int = 2560, tmp_path=None):
+    """Helper: build a PivotalEmbedding with deterministic random vectors."""
+    torch.manual_seed(abs(hash(trigger)) % (2**31))
+    return PivotalEmbedding(
+        trigger=trigger,
+        vectors=torch.randn(num_tokens, hidden, dtype=torch.float32),
+        num_tokens=num_tokens,
+        source="merged",
+        source_path=Path(f"/tmp/{trigger}.safetensors")
+        if tmp_path is None
+        else tmp_path / f"{trigger}.st",
+    )
+
+
+def test_apply_pivotals_empty_raises():
+    # Arrange
+    pipe = _make_mock_pipe()
+
+    # Act / Assert — empty list must raise before any tokenizer mutation
+    with pytest.raises(ValueError, match="empty"):
+        apply_pivotals_to_pipe(pipe, [])
+
+
+def test_apply_pivotals_empty_does_not_call_add_tokens():
+    # Arrange
+    pipe = _make_mock_pipe()
+
+    # Act
+    with pytest.raises(ValueError):
+        apply_pivotals_to_pipe(pipe, [])
+
+    # Assert: tokenizer was never touched
+    pipe.tokenizer.add_tokens.assert_not_called()
+
+
+def test_apply_pivotals_n2_happy_path(tmp_path: Path):
+    # Arrange
+    pipe = _make_mock_pipe()
+    piv_a = _make_pivotal("lyraface", tmp_path=tmp_path)
+    piv_b = _make_pivotal("mirrorface", tmp_path=tmp_path)
+
+    # Act
+    out_ids = apply_pivotals_to_pipe(pipe, [piv_a, piv_b])
+
+    # Assert: returned structure — 2 per-pivotal id lists
+    assert len(out_ids) == 2
+    assert len(out_ids[0]) == 4  # lyraface: 4 tokens
+    assert len(out_ids[1]) == 4  # mirrorface: 4 tokens
+
+    # add_tokens called exactly once with the flat concatenated list
+    pipe.tokenizer.add_tokens.assert_called_once()
+    flat_arg = pipe.tokenizer.add_tokens.call_args[0][0]
+    assert flat_arg == [
+        "lyraface",
+        "lyraface_1",
+        "lyraface_2",
+        "lyraface_3",
+        "mirrorface",
+        "mirrorface_1",
+        "mirrorface_2",
+        "mirrorface_3",
+    ]
+
+    # resize_token_embeddings called exactly once
+    pipe.text_encoder.resize_token_embeddings.assert_called_once()
+
+    # Round-trip: vectors land in the embedding table at returned ids
+    embed_weight = pipe.text_encoder.get_input_embeddings().weight
+    for piv, ids in zip([piv_a, piv_b], out_ids):
+        for i, pid in enumerate(ids):
+            assert torch.allclose(
+                embed_weight[pid].float().cpu(),
+                piv.vectors[i].float().cpu(),
+                atol=5e-2,
+            )
+
+
+def test_apply_pivotals_shared_trigger_raises_before_add_tokens(tmp_path: Path):
+    # Arrange — two pivotals both using trigger "lyra" → intra-set duplicate
+    pipe = _make_mock_pipe()
+    piv_a = _make_pivotal("lyra", tmp_path=tmp_path)
+    piv_b = _make_pivotal("lyra", tmp_path=tmp_path)
+
+    # Snapshot tokenizer + TE state; atomicity = zero mutation on raise
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="share placeholder"):
+        apply_pivotals_to_pipe(pipe, [piv_a, piv_b])
+
+    # Guarantee: add_tokens / resize must NOT have been called
+    pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
+
+
+def test_apply_pivotals_vocab_collision_added_tokens_raises_before_add_tokens(tmp_path: Path):
+    # Arrange — trigger already present in added_tokens_encoder
+    pipe = _make_mock_pipe()
+    pipe.tokenizer.added_tokens_encoder["lyraface"] = 99999
+    piv = _make_pivotal("lyraface", tmp_path=tmp_path)
+
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="already exist"):
+        apply_pivotals_to_pipe(pipe, [piv])
+
+    # Guarantee: add_tokens / resize must NOT have been called
+    pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
+
+
+def test_apply_pivotals_vocab_collision_base_vocab_raises_before_add_tokens(tmp_path: Path):
+    # Arrange — trigger in base get_vocab() (not added_tokens_encoder)
+    pipe = _make_mock_pipe()
+    # Override get_vocab to return the trigger as a pre-existing token
+    pipe.tokenizer.get_vocab = MagicMock(return_value={"lyraface": 12345})
+    # Clear added_tokens_encoder so collision comes only from base vocab
+    pipe.tokenizer.added_tokens_encoder = {}
+    piv = _make_pivotal("lyraface", tmp_path=tmp_path)
+
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="already exist"):
+        apply_pivotals_to_pipe(pipe, [piv])
+
+    pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
+
+
+def test_apply_pivotal_singular_wrapper_returns_flat_list(tmp_path: Path):
+    # Arrange — singular wrapper must return list[int], not list[list[int]]
+    pipe = _make_mock_pipe()
+    piv = _make_pivotal("lyraface", tmp_path=tmp_path)
+
+    # Act
+    result = apply_pivotal_to_pipe(pipe, piv)
+
+    # Assert: flat list, not nested
+    assert isinstance(result, list)
+    assert len(result) == 4
+    assert all(isinstance(x, int) for x in result)
+
+
+def test_apply_pivotal_singular_identical_to_plural_n1(tmp_path: Path):
+    # Arrange — singular result must equal plural[0] for N=1
+    pipe_s = _make_mock_pipe()
+    pipe_p = _make_mock_pipe()
+    torch.manual_seed(7)
+    vecs = torch.randn(4, 2560, dtype=torch.float32)
+    piv_s = PivotalEmbedding(
+        trigger="lyraface",
+        vectors=vecs,
+        num_tokens=4,
+        source="merged",
+        source_path=tmp_path / "x.st",
+    )
+    piv_p = PivotalEmbedding(
+        trigger="lyraface",
+        vectors=vecs,
+        num_tokens=4,
+        source="merged",
+        source_path=tmp_path / "x.st",
+    )
+
+    # Act
+    ids_singular = apply_pivotal_to_pipe(pipe_s, piv_s)
+    ids_plural = apply_pivotals_to_pipe(pipe_p, [piv_p])[0]
+
+    # Assert: same length (ids are assigned sequentially from initial_vocab so equal)
+    assert len(ids_singular) == len(ids_plural)
+
+
+# ── _patch_encode_prompt — idempotency and MagicMock sentinel safety (#34) ───
+
+
+def test_patch_encode_prompt_idempotent_wraps_once(tmp_path: Path):
+    # Arrange — apply a pivotal so tokenizer has tokens, then patch twice
+    pipe = _make_mock_pipe()
+    piv = _make_pivotal("lyraface", tmp_path=tmp_path)
+    apply_pivotals_to_pipe(pipe, [piv])
+
+    pipe.encode_prompt = MagicMock(return_value=("embeds", "ids"))
+    _patch_encode_prompt(pipe)
+    first_patched = pipe.encode_prompt  # the wrapper after 1st call
+
+    _patch_encode_prompt(pipe)  # 2nd call — must be a no-op
+    second_patched = pipe.encode_prompt  # must be the same object
+
+    # Assert: identity preserved — no double-wrapping
+    assert first_patched is second_patched
+
+
+def test_patch_encode_prompt_magicmock_pipe_is_patched():
+    # Arrange — fresh MagicMock pipe (attrs auto-created as truthy child MagicMocks)
+    pipe = MagicMock()
+    # MagicMock auto-creates pipe._imagecli_pivotal_patched as a child MagicMock
+    # (truthy), but the `is True` guard must NOT be fooled by it.
+
+    original_encode = MagicMock(return_value=("embeds", "ids"))
+    pipe.encode_prompt = original_encode
+    pipe.tokenizer.added_tokens_encoder = {}
+    pipe.tokenizer.tokenize = MagicMock(side_effect=lambda s: s.split())
+
+    # Act — should NOT be blocked by the sentinel guard
+    _patch_encode_prompt(pipe)
+
+    # Assert: pipe was patched (encode_prompt is now a different callable)
+    assert pipe.encode_prompt is not original_encode
+    assert pipe._imagecli_pivotal_patched is True
+
+
+# ── Round-trip failure path — raise not assert (#34) ─────────────────────────
+
+
+def test_apply_pivotals_round_trip_failure_raises_runtime_error(tmp_path: Path):
+    # Arrange — mock torch.allclose to return False to force round-trip failure.
+    # torch is imported inside the function body, so patch the torch module directly.
+    pipe = _make_mock_pipe()
+    piv = _make_pivotal("lyraface", tmp_path=tmp_path)
+
+    import torch as _torch
+
+    with patch.object(_torch, "allclose", return_value=False):
+        # Act / Assert — must be RuntimeError, not AssertionError
+        with pytest.raises(RuntimeError, match="round-trip"):
+            apply_pivotals_to_pipe(pipe, [piv])
+
+
+def test_apply_pivotals_round_trip_uses_raise_not_assert():
+    # Arrange — static check: source must use `raise RuntimeError`, not `assert`
+    import ast
+    import inspect
+
+    from imagecli import pivotal_apply
+
+    source = inspect.getsource(pivotal_apply.apply_pivotals_to_pipe)
+    tree = ast.parse(source)
+
+    # Collect all Raise nodes targeting RuntimeError in the function body
+    raise_nodes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Raise)
+        and node.exc is not None
+        and isinstance(node.exc, ast.Call)
+        and (
+            (isinstance(node.exc.func, ast.Name) and node.exc.func.id == "RuntimeError")
+            or (isinstance(node.exc.func, ast.Attribute) and node.exc.func.attr == "RuntimeError")
+        )
+    ]
+    assert raise_nodes, (
+        "apply_pivotals_to_pipe must use `raise RuntimeError(...)` for round-trip "
+        "failure — `assert` is stripped under `python -O` and would silently pass."
     )

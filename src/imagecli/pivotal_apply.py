@@ -14,13 +14,28 @@ from imagecli.pivotal_load import PivotalEmbedding
 logger = logging.getLogger(__name__)
 
 
-def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
-    """Wire a parsed pivotal embedding into a Flux2Klein pipeline.
+def _placeholder_tokens_for(pivotal: PivotalEmbedding) -> list[str]:
+    """Placeholder token sequence a pivotal expands to (bare trigger + suffixes)."""
+    n = pivotal.num_tokens
+    return [pivotal.trigger] + [f"{pivotal.trigger}_{i}" for i in range(1, n)]
 
-    Adds placeholder tokens to the tokenizer, resizes the TE's input
-    embedding, writes the trained vectors into the new rows, and runs a
-    deterministic round-trip assertion. Returns the list of placeholder
-    token ids.
+
+def apply_pivotals_to_pipe(pipe, pivotals: list[PivotalEmbedding]) -> list[list[int]]:
+    """Wire one or more pivotal embeddings into a Flux2Klein pipeline atomically.
+
+    Adds placeholder tokens for every pivotal in a single ``add_tokens`` call,
+    resizes the TE embedding table once, writes the trained vectors for each
+    pivotal into its rows, and runs a per-pivotal round-trip assertion.
+    Returns a list of per-pivotal placeholder id lists (same order as inputs).
+
+    Atomicity: this is a collision *pre-check* guarantee. If any trigger
+    (or its ``_1..._{n-1}`` suffixes) collides with an existing vocab entry
+    OR with another pivotal's placeholder set, the function raises BEFORE
+    calling ``add_tokens`` — every pivotal is applied or none are, with
+    no tokenizer mutation. The guarantee does NOT extend past ``add_tokens``:
+    if ``resize_token_embeddings`` or the vector-write sequence below fails
+    (OOM, backend bug) after ``add_tokens`` succeeded, the tokenizer is
+    left dirty and the engine must be discarded via ``cleanup()``.
 
     Must be called while the text encoder is still on CPU (before any
     ``.to("cuda")``). The tokenizer and TE writes are independent of LoRA
@@ -28,93 +43,111 @@ def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
     table is mutated.
 
     Raises:
-      ValueError: if the trigger or its suffixes already exist in the
-        tokenizer vocabulary.
-      RuntimeError: if the round-trip read-back does not match the source
+      ValueError: ``pivotals`` empty; OR two pivotals share placeholder
+        tokens; OR any placeholder collides with the existing vocab.
+      RuntimeError: if a round-trip read-back does not match the source
         vectors within ``atol=5e-2`` (bf16 precision bound). Intentionally
         ``raise`` rather than ``assert`` so the guard survives ``python -O``.
     """
     import torch
 
+    if not pivotals:
+        raise ValueError("apply_pivotals_to_pipe: pivotals list is empty.")
+
     tok = pipe.tokenizer
     te = pipe.text_encoder
-    trigger = pivotal.trigger
-    n = pivotal.num_tokens
-    placeholder_tokens = [trigger] + [f"{trigger}_{i}" for i in range(1, n)]
 
-    # Pre-check for collisions BEFORE calling add_tokens. HuggingFace add_tokens
-    # is not atomic — if some tokens already exist and others don't, the new
-    # ones are added anyway and we only learn about the conflict via the return
-    # count. That leaves the tokenizer partially mutated, which is confusing to
-    # diagnose. Checking against added_tokens_encoder and the base vocab up-front
-    # keeps the operation atomic: either all tokens are fresh and we proceed, or
-    # we raise without touching the tokenizer.
-    added_encoder = getattr(tok, "added_tokens_encoder", {}) or {}
-    base_vocab = tok.get_vocab() if hasattr(tok, "get_vocab") else {}
-    collisions = [
-        t for t in placeholder_tokens if t in added_encoder or t in base_vocab
-    ]
-    if collisions:
+    per_pivotal_tokens: list[list[str]] = [_placeholder_tokens_for(p) for p in pivotals]
+    flat_tokens: list[str] = [t for group in per_pivotal_tokens for t in group]
+
+    # Atomic pre-check (1): two pivotals must not claim the same placeholder.
+    seen: set[str] = set()
+    intra_dupes: list[str] = []
+    for t in flat_tokens:
+        if t in seen:
+            intra_dupes.append(t)
+        seen.add(t)
+    if intra_dupes:
+        triggers = [p.trigger for p in pivotals]
         raise ValueError(
-            f"Trigger {trigger!r} (or its suffixes) already exist in the "
-            f"tokenizer vocabulary: {collisions}. Use a different trigger word."
+            f"apply_pivotals_to_pipe: triggers {triggers} share placeholder "
+            f"token(s) {sorted(set(intra_dupes))}. Pick distinct trigger words."
         )
 
-    added = tok.add_tokens(placeholder_tokens)
-    if added != n:
-        # Defensive: should be unreachable given the pre-check, but if a
-        # tokenizer implementation de-duplicates differently than we expect,
-        # surface the mismatch rather than silently corrupting the TE.
+    # Atomic pre-check (2): no placeholder may already exist in the vocab.
+    # HuggingFace ``add_tokens`` is not atomic on partial collision, so this
+    # check must happen before calling it. Checking against both
+    # ``added_tokens_encoder`` and the base ``get_vocab()`` keeps the op
+    # atomic: either all tokens are fresh and we proceed, or we raise
+    # without touching the tokenizer.
+    added_encoder = getattr(tok, "added_tokens_encoder", {}) or {}
+    base_vocab = tok.get_vocab() if hasattr(tok, "get_vocab") else {}
+    collisions = [t for t in flat_tokens if t in added_encoder or t in base_vocab]
+    if collisions:
         raise ValueError(
-            f"Trigger {trigger!r}: pre-check passed but add_tokens returned "
-            f"{added}/{n}. Tokenizer state may be inconsistent."
+            f"apply_pivotals_to_pipe: placeholder token(s) already exist in the "
+            f"tokenizer vocabulary: {sorted(set(collisions))}. "
+            f"Use different trigger word(s)."
+        )
+
+    added = tok.add_tokens(flat_tokens)
+    if added != len(flat_tokens):
+        # Defensive: unreachable given the pre-check, but surface any tokenizer
+        # de-duplication quirk rather than silently corrupting TE rows.
+        raise ValueError(
+            f"apply_pivotals_to_pipe: pre-check passed but add_tokens returned "
+            f"{added}/{len(flat_tokens)}. Tokenizer state may be inconsistent."
         )
 
     te.resize_token_embeddings(len(tok))
-    placeholder_ids = [tok.convert_tokens_to_ids(t) for t in placeholder_tokens]
-
     embed_tokens = te.get_input_embeddings()
     weight = embed_tokens.weight
-    vecs = pivotal.vectors.to(device=weight.device, dtype=weight.dtype)
+
+    out_ids: list[list[int]] = []
     with torch.no_grad():
-        for i, pid in enumerate(placeholder_ids):
-            weight[pid] = vecs[i]
+        for pivotal, group in zip(pivotals, per_pivotal_tokens, strict=True):
+            placeholder_ids = [tok.convert_tokens_to_ids(t) for t in group]
+            vecs = pivotal.vectors.to(device=weight.device, dtype=weight.dtype)
+            for i, pid in enumerate(placeholder_ids):
+                weight[pid] = vecs[i]
+            out_ids.append(placeholder_ids)
 
-    # Deterministic round-trip check (SC-6) — closes the silent-failure loop
-    # at wire-time. atol=5e-2 accounts for fp32→bf16→fp32 precision loss: bf16
-    # ULP scales with magnitude (ULP ~= |value| * 2^-8), so at the ~3-4
-    # magnitudes seen in torch.randn-sized tensors the per-value error can
-    # reach ~1.5e-2. Real trained embeddings are typically smaller (magnitude
-    # ~0.02-1.0) with correspondingly tighter round-trip error, but the check
-    # must hold under the looser worst case. A genuinely wrong row (random-init
-    # vs trained) differs by ~1.0 in magnitude — 20x the bound — so this still
-    # catches silent misrouting.
-    #
-    # Intentionally NOT `assert` — assert statements are stripped under
-    # `python -O` / PYTHONOPTIMIZE=1, which would defeat the entire silent-drop
-    # prevention design goal. Use explicit `raise RuntimeError` so the guard is
-    # preserved under every Python invocation mode.
-    trigger_id = tok.convert_tokens_to_ids(trigger)
-    if trigger_id != placeholder_ids[0]:
-        raise RuntimeError(
-            f"pivotal round-trip: trigger id mismatch "
-            f"({trigger_id} vs {placeholder_ids[0]})"
-        )
-    te_rows = embed_tokens.weight[placeholder_ids].detach().float().cpu()
-    src = pivotal.vectors.detach().float().cpu()
-    if not torch.allclose(te_rows, src, atol=5e-2):
-        raise RuntimeError(
-            f"pivotal round-trip: vector mismatch, max abs diff "
-            f"{(te_rows - src).abs().max().item():.3e}"
+    # Per-pivotal round-trip check. atol=5e-2 accounts for fp32→bf16→fp32
+    # precision loss. Intentionally NOT ``assert`` — ``assert`` is stripped
+    # under ``python -O`` / ``PYTHONOPTIMIZE=1`` which would defeat the
+    # silent-drop prevention design goal.
+    for pivotal, placeholder_ids in zip(pivotals, out_ids, strict=True):
+        trigger_id = tok.convert_tokens_to_ids(pivotal.trigger)
+        if trigger_id != placeholder_ids[0]:
+            raise RuntimeError(
+                f"pivotal round-trip: trigger id mismatch for {pivotal.trigger!r} "
+                f"({trigger_id} vs {placeholder_ids[0]})"
+            )
+        te_rows = embed_tokens.weight[placeholder_ids].detach().float().cpu()
+        src = pivotal.vectors.detach().float().cpu()
+        if not torch.allclose(te_rows, src, atol=5e-2):
+            raise RuntimeError(
+                f"pivotal round-trip: vector mismatch for {pivotal.trigger!r}, "
+                f"max abs diff {(te_rows - src).abs().max().item():.3e}"
+            )
+        logger.info(
+            "Pivotal: loaded %d tokens for %r from %s",
+            pivotal.num_tokens,
+            pivotal.trigger,
+            pivotal.source_path,
         )
 
-    logger.info(
-        "Pivotal: loaded %d tokens for %r from %s",
-        n,
-        trigger,
-        pivotal.source_path,
-    )
-    return placeholder_ids
+    return out_ids
+
+
+def apply_pivotal_to_pipe(pipe, pivotal: PivotalEmbedding) -> list[int]:
+    """Singular wrapper — delegates to :func:`apply_pivotals_to_pipe`.
+
+    Kept as the ergonomic entry point for N=1. Behavior is identical to the
+    pre-#34 implementation because the plural path handles N=1 through the
+    same atomic-mutation code.
+    """
+    return apply_pivotals_to_pipe(pipe, [pivotal])[0]
 
 
 def _maybe_convert_prompt(prompt: str, tokenizer) -> str:
@@ -183,9 +216,15 @@ def _maybe_convert_prompt(prompt: str, tokenizer) -> str:
 def _patch_encode_prompt(pipe) -> None:
     """Wrap ``pipe.encode_prompt`` to expand bare triggers before tokenization.
 
-    Instance-level monkey-patch (does not touch the class). Called once after
-    ``apply_pivotal_to_pipe``. Covers all three inference paths that pass a
-    string prompt through ``encode_prompt``:
+    Instance-level monkey-patch (does not touch the class). Idempotent via
+    the ``pipe._imagecli_pivotal_patched`` sentinel — calling this twice on
+    the same pipe is a no-op, which matters when multiple pivotal LoRAs are
+    applied in one load (each call would otherwise stack another wrapper
+    around the prior wrapper, visibly corrupting log output and subtly
+    altering call semantics).
+
+    Covers all three inference paths that pass a string prompt through
+    ``encode_prompt``:
       1. ``ImageEngine.generate`` → ``self._pipe(prompt=...)`` → internal encode
       2. all-on-GPU batch ``encode_and_generate`` → same
       3. 2-phase batch phase-1 ``engine.encode_prompt`` → direct
@@ -195,6 +234,11 @@ def _patch_encode_prompt(pipe) -> None:
     consumes embeddings produced by phase-1, which already went through this
     patch.
     """
+    # `is True` (not truthy) so that test doubles like MagicMock, which
+    # auto-create attributes returning a truthy child MagicMock on any
+    # attribute access, do not spuriously trigger the idempotency guard.
+    if getattr(pipe, "_imagecli_pivotal_patched", False) is True:
+        return
     original = pipe.encode_prompt
     tokenizer = pipe.tokenizer
     # Closure-carried flag: first rewrite per load logs at INFO, subsequent at
@@ -236,3 +280,4 @@ def _patch_encode_prompt(pipe) -> None:
         return original(*args, **kwargs)
 
     pipe.encode_prompt = _patched
+    pipe._imagecli_pivotal_patched = True

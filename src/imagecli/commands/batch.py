@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import typer
 
 from imagecli.commands._batch_all_on_gpu import run_all_on_gpu
 from imagecli.commands._batch_sequential import run_sequential
 from imagecli.commands._batch_two_phase import run_two_phase
-from imagecli.commands._helpers import console, load_config
+from imagecli.commands._helpers import console, load_config, resolve_loras
 
 
 def batch(
@@ -36,32 +36,34 @@ def batch(
         typer.Option("--steps", "-s", help="Override inference steps for all prompts."),
     ] = None,
     lora: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
-            "--lora", help="Path to LoRA weights (.safetensors). Loaded before quantization."
+            "--lora", help="Path to LoRA weights (.safetensors). Repeatable for multi-LoRA."
         ),
     ] = None,
     lora_scale: Annotated[
-        Optional[float],
-        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0)."),
+        Optional[List[float]],
+        typer.Option(
+            "--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."
+        ),
     ] = None,
     trigger: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
             "--trigger",
             help=(
-                "Pivotal tuning trigger word (e.g. 'lyraface'). Required when "
-                "the LoRA was trained with ai-toolkit's 'embedding:' block. "
+                "Pivotal tuning trigger word (e.g. 'lyraface'). Pairwise with --lora. "
+                "Required when the LoRA was trained with ai-toolkit's 'embedding:' block. "
                 "See docs/lora.md for details."
             ),
         ),
     ] = None,
     embedding: Annotated[
-        Optional[str],
+        Optional[List[str]],
         typer.Option(
             "--embedding",
             help=(
-                "Path to a standalone pivotal embedding (.safetensors). "
+                "Path to a standalone pivotal embedding (.safetensors). Pairwise with --lora. "
                 "Overrides emb_params in the LoRA file. See docs/lora.md."
             ),
         ),
@@ -78,6 +80,11 @@ def batch(
 
     console.print(f"Batch: {len(files)} prompt(s) found in {directory}")
 
+    cli_loras: list[str] = lora or []
+    cli_scales: list[float] = lora_scale or []
+    cli_triggers: list[str] = trigger or []
+    cli_embeddings: list[str] = embedding or []
+
     from imagecli.engine import get_engine
     from imagecli.markdown import parse_prompt_file
 
@@ -91,17 +98,13 @@ def batch(
 
     if single_engine:
         the_engine_name = engine_names.pop()
-        batch_lora = lora or parsed[0][1].lora_path
-        batch_lora_scale = lora_scale if lora_scale is not None else parsed[0][1].lora_scale
-        batch_trigger = trigger or parsed[0][1].trigger
-        batch_embedding = embedding or parsed[0][1].embedding_path
+        first_doc = parsed[0][1]
+        fm_loras = getattr(first_doc, "loras", [])
+        batch_loras = resolve_loras(cli_loras, cli_scales, cli_triggers, cli_embeddings, fm_loras)
         the_engine = get_engine(
             the_engine_name,
             compile=not no_compile,
-            lora_path=batch_lora,
-            lora_scale=batch_lora_scale,
-            trigger=batch_trigger,
-            embedding_path=batch_embedding,
+            loras=batch_loras,
         )
 
         if hasattr(the_engine, "load_all_on_gpu") and not two_phase:
@@ -136,6 +139,16 @@ def batch(
                 steps_override=steps,
             )
     else:
+        # Multi-engine path has a three-state override:
+        #   list  → CLI provided LoRAs, applies to every doc uniformly.
+        #   None  → no CLI --lora; run_sequential reads per-doc `doc.loras`.
+        #   []    → intentionally disabled via CLI (reserved; not wired).
+        # None vs [] is load-bearing — do not conflate when refactoring.
+        cli_loras_override = (
+            resolve_loras(cli_loras, cli_scales, cli_triggers, cli_embeddings, [])
+            if cli_loras
+            else None
+        )
         successes, failures = run_sequential(
             parsed,
             cfg,
@@ -143,10 +156,7 @@ def batch(
             no_compile,
             console,
             steps_override=steps,
-            lora_override=lora,
-            lora_scale_override=lora_scale,
-            trigger_override=trigger,
-            embedding_override=embedding,
+            loras_override=cli_loras_override,
         )
 
     console.rule()

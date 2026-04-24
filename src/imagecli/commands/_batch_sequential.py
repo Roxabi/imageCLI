@@ -8,6 +8,7 @@ from imagecli.commands._helpers import (
     resolve_face_images,
     run_generate,
 )
+from imagecli.lora_spec import LoraSpec
 
 
 def run_sequential(
@@ -18,10 +19,7 @@ def run_sequential(
     console_,
     initial_engine=None,
     steps_override=None,
-    lora_override=None,
-    lora_scale_override=None,
-    trigger_override=None,
-    embedding_override=None,
+    loras_override: list[LoraSpec] | None = None,
 ):
     from imagecli.engine import ImageEngine, get_engine
 
@@ -46,15 +44,13 @@ def run_sequential(
                 current_engine_name = None
 
             if current_engine is None:
+                fm_loras = getattr(doc, "loras", [])
+                # loras_override non-None → CLI replaces FM. None → use FM.
+                doc_loras = loras_override if loras_override is not None else fm_loras
                 current_engine = get_engine(
                     engine_name,
                     compile=not no_compile,
-                    lora_path=lora_override or doc.lora_path,
-                    lora_scale=lora_scale_override
-                    if lora_scale_override is not None
-                    else doc.lora_scale,
-                    trigger=trigger_override or doc.trigger,
-                    embedding_path=embedding_override or doc.embedding_path,
+                    loras=doc_loras,
                 )
                 current_engine_name = engine_name
 

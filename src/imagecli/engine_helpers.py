@@ -119,9 +119,7 @@ def quantize_transformer(pipe: object, sm: tuple[int, int]) -> str:
             "Install it with: uv add optimum[quanto]"
         ) from e
     except (RuntimeError, ValueError) as e:
-        logger.warning(
-            "Quantization failed (%s), proceeding with bf16 (~20GB VRAM required).", e
-        )
+        logger.warning("Quantization failed (%s), proceeding with bf16 (~20GB VRAM required).", e)
         return "bf16"
 
 

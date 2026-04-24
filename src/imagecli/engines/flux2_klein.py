@@ -39,15 +39,35 @@ class Flux2KleinEngine(ImageEngine):
         )
         # LoRA must be loaded BEFORE quantization — weights are fused into bf16 base,
         # then quantized together. Loading after quantization silently has no effect.
-        if self.lora_path:
-            logger.info("Loading LoRA from %s...", self.lora_path)
-            self._pipe.load_lora_weights(self.lora_path)
-            if self.lora_scale != 1.0:
-                self._pipe.set_adapters(["default_0"], adapter_weights=[self.lora_scale])
-                logger.info("LoRA adapter scale set to %.2f", self.lora_scale)
-            self._pipe.fuse_lora()
+        if self.loras:
+            adapter_names = []
+            for i, spec in enumerate(self.loras):
+                name = f"lora_{i}"
+                logger.info("Loading LoRA %d/%d from %s...", i + 1, len(self.loras), spec.path)
+                self._pipe.load_lora_weights(spec.path, adapter_name=name)
+                adapter_names.append(name)
+            if len(adapter_names) > 1:
+                # N≥2: adapters have distinct weights → set_adapters carries
+                # per-adapter scale, then fuse_lora(1.0) applies no global
+                # multiplier on top.
+                self._pipe.set_adapters(
+                    adapter_names, adapter_weights=[s.scale for s in self.loras]
+                )
+                logger.info(
+                    "Set %d adapters with scales %s.",
+                    len(adapter_names),
+                    [s.scale for s in self.loras],
+                )
+            # N=1: diffusers' fuse_lora(lora_scale=s) applies a global scalar
+            # multiplier across the only active adapter — equivalent to
+            # set_adapters(["lora_0"], [s]) + fuse_lora(1.0) for a single
+            # adapter (the per-adapter weight and the global multiplier
+            # combine multiplicatively, so scale*1.0 == 1.0*scale at a single
+            # adapter). This is the pre-#34 single-LoRA behavior preserved.
+            fuse_scale = self.loras[0].scale if len(self.loras) == 1 else 1.0
+            self._pipe.fuse_lora(lora_scale=fuse_scale)
             self._pipe.unload_lora_weights()
-            logger.info("LoRA fused into base weights.")
+            logger.info("LoRA(s) fused into base weights.")
         # Pivotal tuning: load trained trigger vectors into the TE BEFORE
         # transformer quantization. Touches tokenizer + embed_tokens only;
         # disjoint from LoRA fuse/unload and transformer quantize.
@@ -90,8 +110,10 @@ class Flux2KleinEngine(ImageEngine):
         if not hasattr(orig_cls, "_orig_execution_device"):
             orig_cls._orig_execution_device = orig_cls._execution_device
             orig_cls._execution_device = property(
-                lambda pipe: getattr(pipe, "_execution_device_override", None)
-                or orig_cls._orig_execution_device.fget(pipe)
+                lambda pipe: (
+                    getattr(pipe, "_execution_device_override", None)
+                    or orig_cls._orig_execution_device.fget(pipe)
+                )
             )
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("All components on GPU (~12 GB) — no phase switching.")
@@ -136,7 +158,13 @@ class Flux2KleinEngine(ImageEngine):
 
         image = result.images[0]
         return self._save_image(
-            image, output_path, seed=seed, steps=steps, guidance=guidance, width=width, height=height
+            image,
+            output_path,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
         )
 
     # ── 2-phase batch ──────────────────────────────────────────────────────
@@ -185,8 +213,10 @@ class Flux2KleinEngine(ImageEngine):
         if not hasattr(orig_cls, "_orig_execution_device"):
             orig_cls._orig_execution_device = orig_cls._execution_device
             orig_cls._execution_device = property(
-                lambda pipe: getattr(pipe, "_execution_device_override", None)
-                or orig_cls._orig_execution_device.fget(pipe)
+                lambda pipe: (
+                    getattr(pipe, "_execution_device_override", None)
+                    or orig_cls._orig_execution_device.fget(pipe)
+                )
             )
         # Skip compile: torch.compile conflicts with QLinear.forward contiguity patch.
         self._optimize_pipe(self._pipe, compile=False)

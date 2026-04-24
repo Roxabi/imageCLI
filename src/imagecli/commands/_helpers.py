@@ -6,6 +6,7 @@ and lets batch strategies reuse ``run_generate`` without pulling ``cli.py``.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 
@@ -20,7 +21,55 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from imagecli.lora_spec import LoraSpec
+
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+def resolve_loras(
+    cli_loras: list[str],
+    cli_scales: list[float],
+    cli_triggers: list[str],
+    cli_embeddings: list[str],
+    fm_loras: list[LoraSpec],
+) -> list[LoraSpec]:
+    """Resolve LoRA list from CLI flags and/or frontmatter.
+
+    CLI non-empty → replaces FM list entirely (no merge).
+    Empty CLI → return FM list as-is.
+    Pairwise: scales/triggers/embeddings must be empty OR same length as loras.
+    """
+    if not cli_loras:
+        return list(fm_loras)
+
+    if fm_loras:
+        logger.info("CLI --lora overrides frontmatter loras: list (N=%d)", len(fm_loras))
+
+    n = len(cli_loras)
+
+    def _check_pairwise(values: list, name: str) -> None:
+        if values and len(values) != n:
+            raise ValueError(
+                f"--{name} repeated {len(values)} time(s) but --lora repeated {n} time(s); "
+                f"they must match (or omit --{name} entirely for defaults)."
+            )
+
+    _check_pairwise(cli_scales, "lora-scale")
+    _check_pairwise(cli_triggers, "trigger")
+    _check_pairwise(cli_embeddings, "embedding")
+
+    result: list[LoraSpec] = []
+    for i, path in enumerate(cli_loras):
+        result.append(
+            LoraSpec(
+                path=path,
+                scale=cli_scales[i] if cli_scales else 1.0,
+                trigger=cli_triggers[i] if cli_triggers else None,
+                embedding_path=cli_embeddings[i] if cli_embeddings else None,
+            )
+        )
+    return result
 
 
 def resolve_face_image(face_image: str | None, prompt_dir: Path) -> str | None:
@@ -69,20 +118,14 @@ def run_generate(
     face_image: str | None = None,
     face_images: list[str] | None = None,
     pulid_strength: float = 0.6,
-    lora_path: str | None = None,
-    lora_scale: float = 1.0,
-    trigger: str | None = None,
-    embedding_path: str | None = None,
+    loras: list[LoraSpec] | None = None,
 ):
     from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
     engine: ImageEngine = engine_instance or get_engine(
         engine_name,
         compile=compile,
-        lora_path=lora_path,
-        lora_scale=lora_scale,
-        trigger=trigger,
-        embedding_path=embedding_path,
+        loras=loras or [],
     )
 
     preflight_check(engine)
