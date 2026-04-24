@@ -58,7 +58,7 @@ def get_engine(
                 "(lora_path / trigger / embedding_path), not both."
             )
         return registry[name](compile=compile, loras=loras)
-    # TODO(v0.next-minor+1): remove legacy singular-kwargs branch after one release cycle.
+    # TODO(#72): remove legacy singular-kwargs branch after one release cycle.
     if lora_path is not None or trigger is not None or embedding_path is not None:
         warnings.warn(
             "get_engine singular LoRA kwargs (lora_path, lora_scale, trigger, "
