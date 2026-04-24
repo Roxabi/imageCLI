@@ -10,7 +10,7 @@ Load path:
   3. Place all components on GPU — no cpu_offload (NVFP4 kernels require CUDA)
   4. Override _execution_device so the pipeline routes denoising to CUDA
 
-Generation path: identical to pulid-flux2-klein (EVA-CLIP offload → _patch_flux
+Generation path: identical to pulid-flux2-klein (EVA-CLIP offload → patch_flux2
 → super().generate → unpatch → EVA-CLIP restore).
 
 Requires: sm_120+ (RTX 5070 Ti / Blackwell), CUDA 13.0+, comfy-kitchen.
@@ -23,12 +23,11 @@ import logging
 from pathlib import Path
 
 from imagecli.engine import EngineCapabilities, ImageEngine
+from imagecli.engines._pulid import PuLIDFlux2, patch_flux2
 from imagecli.engines.pulid_flux2_klein import (
     _INSIGHTFACE_DIR,
     _PULID_DEFAULT,
-    _PuLIDFlux2,
     _extract_id_tokens,
-    _patch_flux,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         # PuLID patching. Force compile=False, same as pulid-flux2-klein.
         # LoRA not supported; absorb kwargs to allow batch() passthrough.
         super().__init__(compile=False, **kwargs)  # type: ignore[arg-type]
-        self._pulid: _PuLIDFlux2 | None = None
+        self._pulid: PuLIDFlux2 | None = None
         self._insightface: object | None = None
         self._eva_clip: object | None = None
 
@@ -148,7 +147,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         # PuLID model — same weights and path as pulid-flux2-klein
         logger.info("Loading PuLID model from %s…", _PULID_DEFAULT)
-        self._pulid = _PuLIDFlux2.from_safetensors(_PULID_DEFAULT)
+        self._pulid = PuLIDFlux2.from_safetensors(_PULID_DEFAULT)
         self._pulid.eval().to("cuda", dtype=torch.bfloat16)
 
         logger.info("Loading InsightFace (AntelopeV2)…")
@@ -252,7 +251,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         if callback is not None:
             pipe_kwargs["callback_on_step_end"] = callback
 
-        unpatch = _patch_flux(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)  # type: ignore[union-attr]
+        unpatch = patch_flux2(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)  # type: ignore[union-attr]
         try:
             with torch.inference_mode():
                 result = self._pipe(**pipe_kwargs)  # type: ignore[union-attr]
