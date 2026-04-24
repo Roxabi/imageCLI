@@ -21,7 +21,7 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
-class _PerceiverAttentionCA(nn.Module):
+class KleinPerceiverAttentionCA(nn.Module):
     def __init__(self, dim: int = 4096, dim_head: int = 64, heads: int = 16):
         super().__init__()
         self.heads = heads
@@ -48,7 +48,7 @@ class _PerceiverAttentionCA(nn.Module):
         return self.to_out(out.transpose(1, 2).contiguous().view(B, N, -1))
 
 
-class _IDFormer(nn.Module):
+class KleinIDFormer(nn.Module):
     def __init__(self, dim: int = 4096, num_tokens: int = 4):
         super().__init__()
         self.num_tokens = num_tokens
@@ -58,7 +58,7 @@ class _IDFormer(nn.Module):
             nn.Linear(dim, dim * num_tokens),
         )
         self.latents = nn.Parameter(torch.randn(1, num_tokens, dim) * 0.02)
-        self.layers = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(4)])
+        self.layers = nn.ModuleList([KleinPerceiverAttentionCA(dim=dim) for _ in range(4)])
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, id_embed: torch.Tensor, clip_embed: torch.Tensor) -> torch.Tensor:
@@ -76,9 +76,13 @@ class PuLIDFlux2(nn.Module):
     def __init__(self, dim: int = 4096, n_double_ca: int = 5, n_single_ca: int = 7):
         super().__init__()
         self.dim = dim
-        self.id_former = _IDFormer(dim=dim)
-        self.double_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(n_double_ca)])
-        self.single_ca = nn.ModuleList([_PerceiverAttentionCA(dim=dim) for _ in range(n_single_ca)])
+        self.id_former = KleinIDFormer(dim=dim)
+        self.double_ca = nn.ModuleList(
+            [KleinPerceiverAttentionCA(dim=dim) for _ in range(n_double_ca)]
+        )
+        self.single_ca = nn.ModuleList(
+            [KleinPerceiverAttentionCA(dim=dim) for _ in range(n_single_ca)]
+        )
 
     @classmethod
     def from_safetensors(cls, path: Path) -> "PuLIDFlux2":

@@ -23,12 +23,8 @@ import logging
 from pathlib import Path
 
 from imagecli.engine import EngineCapabilities, ImageEngine
-from imagecli.engines._pulid import PuLIDFlux2, patch_flux2
-from imagecli.engines.pulid_flux2_klein import (
-    _INSIGHTFACE_DIR,
-    _PULID_DEFAULT,
-    _extract_id_tokens,
-)
+from imagecli.engines._pulid import PuLIDFlux2, extract_id_tokens, patch_flux2
+from imagecli.engines.pulid_flux2_klein import _INSIGHTFACE_DIR, _PULID_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +205,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         # ── Step 1: face id tokens (EVA-CLIP temporarily on CUDA) ─────────────
         if self._eva_clip is not None:
             self._eva_clip.to("cuda")  # type: ignore[union-attr]
-        id_tokens = _extract_id_tokens(self._insightface, self._eva_clip, self._pulid, refs)
+        id_tokens = extract_id_tokens(self._insightface, self._eva_clip, self._pulid, refs)
         if self._eva_clip is not None:
             self._eva_clip.to("cpu")  # type: ignore[union-attr]
         torch.cuda.empty_cache()

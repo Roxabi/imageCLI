@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .klein_modules import PuLIDFlux2, _PerceiverAttentionCA
+from .klein_modules import KleinPerceiverAttentionCA, PuLIDFlux2
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def _make_projections(
 
 
 def _apply_ca(
-    ca: _PerceiverAttentionCA,
+    ca: KleinPerceiverAttentionCA,
     hidden_states: torch.Tensor,
     id_tokens: torch.Tensor,
     projections: tuple[nn.Linear, nn.Linear] | None,
