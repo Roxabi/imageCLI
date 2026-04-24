@@ -1,0 +1,66 @@
+---
+title: Split src/imagecli/engines/flux2_klein_fp4.py (476 LOC)
+issue: 58
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/engines/flux2_klein_fp4.py` is 476 LOC — over the 300 LOC
+quality_gates threshold installed in #53. It mixes three concerns:
+
+1. A BFL→diffusers NVFP4 state-dict converter (`_convert_nvfp4_state_dict`,
+   ~100 LOC).
+2. A runtime NVFP4 quantizer / patcher
+   (`_runtime_quantize_transformer_to_nvfp4`, `_patch_transformer_nvfp4`,
+   ~110 LOC).
+3. The `Flux2KleinFP4Engine` class itself (~200 LOC).
+
+The file is exempted in `tools/file_exemptions.txt`; that exemption should
+disappear once the split lands. Both the converter and the quantizer
+mutate transformer tensors during `_load()` — the split must be benchmarked
+to catch silent quantization-path regressions.
+
+## Who
+
+- **Primary:** imageCLI maintainer (Mickael) — needs the quality-gate
+  threshold to stay meaningful; every exemption erodes the signal.
+- **Secondary:** future contributors reading/modifying the FP4 path — a
+  thinner engine class + named sibling modules for the converter and
+  quantizer are easier to grok and test than a 476-line mixed module.
+
+## Constraints
+
+- Behavior parity: NVFP4 path still benchmarks at ~6.8 it/s at 512×512
+  (within ±5%); 2048×2048 still fits at ~8.82 GB peak in `--two-phase` mode.
+- `Flux2KleinFP4Engine` class, its public API, and CLI `-e flux2-klein-fp4`
+  behavior unchanged.
+- Parent = #53 (quality gates). Sibling splits: #54 (cli.py), #57
+  (engine.py).
+- Ruff L≤100, py312, single quality_gates pass (lint + typecheck + tests).
+- Exemption line for `flux2_klein_fp4.py` removed from
+  `tools/file_exemptions.txt`.
+
+## Out of Scope
+
+- No changes to the NVFP4 quantization math or state-dict layout.
+- No changes to torchao/comfy-kitchen integration or dependencies.
+- No changes to other engines or to `engine.py` base class.
+- No new CLI flags or frontmatter fields.
+
+## Complexity
+
+**Tier: F-lite** — mechanical structural split within a single file and
+domain. No new patterns; purely moving code into sibling modules.
+
+Signals:
+- Single domain (FP4 engine internals).
+- ≤3 files touched (1 split source → 2 new sibling modules + the engine
+  file, plus the exemptions file).
+- No architectural unknowns — both helpers are already module-level
+  functions with clear boundaries.
+- Label: `size:F-lite`.
+- Audit note from issue: quantization-path regressions are silent, so
+  benchmark verification is part of acceptance.
