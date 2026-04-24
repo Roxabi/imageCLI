@@ -1,0 +1,53 @@
+---
+title: Split src/imagecli/engine.py (501 LOC) into base + registry
+issue: 57
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/engine.py` is 501 LOC — over the 300 LOC quality_gates threshold
+installed in #53. It currently holds both the `ImageEngine` abstract class
+(plus shared helpers like `preflight_check`, `_get_compute_capability`,
+`_optimize_pipe`, `cleanup`) and the engine registry / factory
+(`_get_registry`, `get_engine`). The file is exempted in
+`tools/file_exemptions.txt`; the exemption should go away once the split
+lands.
+
+## Who
+
+- **Primary:** imageCLI maintainer (Mickael) — needs the quality-gate
+  threshold to stay meaningful; every exemption erodes the signal.
+- **Secondary:** future contributors reading/modifying engines — a thinner
+  `engine_base.py` is easier to grok than a 500-line mixed module.
+
+## Constraints
+
+- Must not change behavior of any of the 8 engines under
+  `src/imagecli/engines/` or `imagecli engines` / `imagecli info` CLI
+  commands.
+- All current imports from `imagecli.engine` must keep working (re-export
+  shim or clean migration — TBD in spec).
+- Merge order: land #57 **after** #54 (cli.py split) so the diff stays
+  focused. Parent = #53 (quality gates).
+- Ruff L≤100, py312, single quality_gates pass (lint + typecheck + tests).
+
+## Out of Scope
+
+- No behavioral changes to any engine.
+- No refactor of individual engine modules.
+- No new quantization paths, no new registry features.
+- No changes to CLI UX or flag semantics.
+
+## Complexity
+
+**Tier: F-lite** — clear structural split within a single domain, mechanical
+cross-file import updates, no architectural unknowns.
+
+Signals:
+- Single domain (Python package internals).
+- ≤10 files touched (1 split source → 2 new modules + 8 engines + cli.py).
+- No new patterns or arch; purely moving code.
+- Label: `size:F-lite`.
