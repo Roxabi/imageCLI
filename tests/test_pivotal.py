@@ -679,12 +679,19 @@ def test_apply_pivotals_shared_trigger_raises_before_add_tokens(tmp_path: Path):
     piv_a = _make_pivotal("lyra", tmp_path=tmp_path)
     piv_b = _make_pivotal("lyra", tmp_path=tmp_path)
 
+    # Snapshot tokenizer + TE state; atomicity = zero mutation on raise
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
     # Act / Assert
     with pytest.raises(ValueError, match="share placeholder"):
         apply_pivotals_to_pipe(pipe, [piv_a, piv_b])
 
-    # Guarantee: add_tokens must NOT have been called
+    # Guarantee: add_tokens / resize must NOT have been called
     pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
 
 
 def test_apply_pivotals_vocab_collision_added_tokens_raises_before_add_tokens(tmp_path: Path):
@@ -693,12 +700,18 @@ def test_apply_pivotals_vocab_collision_added_tokens_raises_before_add_tokens(tm
     pipe.tokenizer.added_tokens_encoder["lyraface"] = 99999
     piv = _make_pivotal("lyraface", tmp_path=tmp_path)
 
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
     # Act / Assert
     with pytest.raises(ValueError, match="already exist"):
         apply_pivotals_to_pipe(pipe, [piv])
 
-    # Guarantee: add_tokens must NOT have been called
+    # Guarantee: add_tokens / resize must NOT have been called
     pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
 
 
 def test_apply_pivotals_vocab_collision_base_vocab_raises_before_add_tokens(tmp_path: Path):
@@ -710,11 +723,17 @@ def test_apply_pivotals_vocab_collision_base_vocab_raises_before_add_tokens(tmp_
     pipe.tokenizer.added_tokens_encoder = {}
     piv = _make_pivotal("lyraface", tmp_path=tmp_path)
 
+    pre_added = dict(pipe.tokenizer.added_tokens_encoder)
+    pre_len = len(pipe.tokenizer)
+
     # Act / Assert
     with pytest.raises(ValueError, match="already exist"):
         apply_pivotals_to_pipe(pipe, [piv])
 
     pipe.tokenizer.add_tokens.assert_not_called()
+    pipe.text_encoder.resize_token_embeddings.assert_not_called()
+    assert dict(pipe.tokenizer.added_tokens_encoder) == pre_added
+    assert len(pipe.tokenizer) == pre_len
 
 
 def test_apply_pivotal_singular_wrapper_returns_flat_list(tmp_path: Path):

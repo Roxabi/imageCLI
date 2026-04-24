@@ -47,6 +47,9 @@ class Flux2KleinEngine(ImageEngine):
                 self._pipe.load_lora_weights(spec.path, adapter_name=name)
                 adapter_names.append(name)
             if len(adapter_names) > 1:
+                # N≥2: adapters have distinct weights → set_adapters carries
+                # per-adapter scale, then fuse_lora(1.0) applies no global
+                # multiplier on top.
                 self._pipe.set_adapters(
                     adapter_names, adapter_weights=[s.scale for s in self.loras]
                 )
@@ -55,6 +58,12 @@ class Flux2KleinEngine(ImageEngine):
                     len(adapter_names),
                     [s.scale for s in self.loras],
                 )
+            # N=1: diffusers' fuse_lora(lora_scale=s) applies a global scalar
+            # multiplier across the only active adapter — equivalent to
+            # set_adapters(["lora_0"], [s]) + fuse_lora(1.0) for a single
+            # adapter (the per-adapter weight and the global multiplier
+            # combine multiplicatively, so scale*1.0 == 1.0*scale at a single
+            # adapter). This is the pre-#34 single-LoRA behavior preserved.
             fuse_scale = self.loras[0].scale if len(self.loras) == 1 else 1.0
             self._pipe.fuse_lora(lora_scale=fuse_scale)
             self._pipe.unload_lora_weights()

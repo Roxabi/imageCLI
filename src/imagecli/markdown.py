@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from imagecli.lora_spec import LoraSpec
+from imagecli.lora_spec import MAX_LORAS, LoraSpec
 
 try:
     import yaml  # type: ignore[import-untyped]
@@ -51,6 +51,10 @@ def _parse_loras(frontmatter: dict) -> list[LoraSpec]:
     raw = frontmatter.pop("loras")
     if not isinstance(raw, list):
         raise ValueError("Frontmatter 'loras:' must be a YAML list.")
+    if len(raw) > MAX_LORAS:
+        raise ValueError(
+            f"Frontmatter 'loras:' has {len(raw)} entries, exceeds cap of {MAX_LORAS}."
+        )
     specs: list[LoraSpec] = []
     for i, item in enumerate(raw):
         if not isinstance(item, dict):

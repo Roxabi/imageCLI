@@ -140,8 +140,16 @@ class ImageNatsAdapter(NatsAdapterBase):
             if not valid:
                 return False, f"embedding_path: {err}"
         else:
+            from imagecli.lora_spec import MAX_LORAS
+
+            loras_list = payload.get("loras") or []
+            if len(loras_list) > MAX_LORAS:
+                return (
+                    False,
+                    f"loras list exceeds cap: {len(loras_list)} > {MAX_LORAS}",
+                )
             # Validate each lora entry's path and embedding_path
-            for i, item in enumerate(payload.get("loras") or []):
+            for i, item in enumerate(loras_list):
                 if not isinstance(item, dict):
                     return False, f"loras[{i}] must be a mapping, got {type(item).__name__}"
                 if "path" not in item:
@@ -335,7 +343,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                             "contract_version": "1",
                             "request_id": request_id,
                             "ok": True,
-                            "file_path": str(final_path.resolve()),
+                            "file_path": final_path.name,
                             "mime_type": f"image/{fmt}",
                             "width": width,
                             "height": height,

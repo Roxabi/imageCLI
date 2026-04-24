@@ -10,6 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Practical cap on stack depth. Not a security-critical bound (the CLI runs
+# locally and the NATS bus is on a trusted LAN), but prevents adversarial or
+# accidental N≫ N (e.g. a misformed YAML list, a generator loop) from OOMing
+# the daemon while holding the concurrency semaphore. Kept liberal (8) so
+# legitimate experimentation with style+subject+face+refiner stacks fits.
+MAX_LORAS = 8
+
 
 @dataclass(frozen=True)
 class LoraSpec:

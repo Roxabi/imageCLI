@@ -28,10 +28,14 @@ def apply_pivotals_to_pipe(pipe, pivotals: list[PivotalEmbedding]) -> list[list[
     pivotal into its rows, and runs a per-pivotal round-trip assertion.
     Returns a list of per-pivotal placeholder id lists (same order as inputs).
 
-    Atomicity: if any trigger (or its ``_1..._{n-1}`` suffixes) collides with
-    an existing vocab entry OR with another pivotal's placeholder set, the
-    function raises BEFORE calling ``add_tokens``. Either every pivotal is
-    applied or none are — no partial tokenizer mutation.
+    Atomicity: this is a collision *pre-check* guarantee. If any trigger
+    (or its ``_1..._{n-1}`` suffixes) collides with an existing vocab entry
+    OR with another pivotal's placeholder set, the function raises BEFORE
+    calling ``add_tokens`` — every pivotal is applied or none are, with
+    no tokenizer mutation. The guarantee does NOT extend past ``add_tokens``:
+    if ``resize_token_embeddings`` or the vector-write sequence below fails
+    (OOM, backend bug) after ``add_tokens`` succeeded, the tokenizer is
+    left dirty and the engine must be discarded via ``cleanup()``.
 
     Must be called while the text encoder is still on CPU (before any
     ``.to("cuda")``). The tokenizer and TE writes are independent of LoRA

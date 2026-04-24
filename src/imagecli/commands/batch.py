@@ -139,7 +139,11 @@ def batch(
                 steps_override=steps,
             )
     else:
-        # Multi-engine: pass resolved CLI loras as override (empty list = use FM per-doc)
+        # Multi-engine path has a three-state override:
+        #   list  → CLI provided LoRAs, applies to every doc uniformly.
+        #   None  → no CLI --lora; run_sequential reads per-doc `doc.loras`.
+        #   []    → intentionally disabled via CLI (reserved; not wired).
+        # None vs [] is load-bearing — do not conflate when refactoring.
         cli_loras_override = (
             resolve_loras(cli_loras, cli_scales, cli_triggers, cli_embeddings, [])
             if cli_loras
