@@ -1,0 +1,49 @@
+---
+title: "refactor(daemon): split src/imagecli/daemon.py into wire + handlers + server"
+issue: 59
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/daemon.py` is 459 LOC (was 444 at issue filing) — over the 300 LOC `quality_gates.file_length` threshold introduced in #53. The file is currently allow-listed in `tools/file_exemptions.txt`, hiding real drift.
+
+Three sub-concerns are cleanly separable:
+
+1. **Wire protocol** — `_send_json`, `_recv_json` (framed JSON over Unix socket)
+2. **Worker/handlers** — `_handle_blend`, `_handle_encode`, `_handle_job` (job dispatch + engine invocation)
+3. **Server loop** — `daemon_main` (socket accept, queue wiring, signal handling)
+
+Splitting reduces the file under threshold, lets the exemption be removed, and isolates handler logic for future test coverage.
+
+## Who
+
+- **Primary:** contributors editing the daemon — smaller files are easier to navigate + review
+- **Secondary:** `imagecli_gen` supervisor service (must keep starting + handling jobs identically)
+
+## Constraints
+
+- Preserve wire behavior bit-for-bit — NATS/socket clients must not notice the split
+- Worker thread shares state via queue → preserve invocation shape (handler signatures, queue payload schema)
+- No new dependencies
+- Must keep `imagecli serve` entrypoint working (Typer command)
+- Low inference risk (no engine internals touched)
+
+## Out of Scope
+
+- Adding tests for handlers (separate issue if desired)
+- Changing the wire protocol or NATS subjects
+- Refactoring `daemon_main` beyond what the extraction requires
+- Touching any engine code
+
+## Complexity
+
+**Tier: F-lite** — clear scope, single file, one domain (daemon wiring), mechanical extraction with well-defined seams from the issue body.
+
+Signals:
+- `size:F-lite` label on issue
+- Single file, no new arch
+- Sub-concerns pre-identified in issue body
+- Parent #53 already established the LOC gate
