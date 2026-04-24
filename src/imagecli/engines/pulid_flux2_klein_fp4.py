@@ -1,6 +1,6 @@
 """FLUX.2-klein-4B + PuLID face identity lock, NVFP4-quantized — Blackwell only.
 
-Combines the NVFP4 runtime quantization path from flux2_klein_fp4 with the
+Combines the NVFP4 runtime quantization path from nvfp4_quantize with the
 PuLID CA activation injection from pulid_flux2_klein.
 
 Load path:
@@ -63,8 +63,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         sm = torch.cuda.get_device_capability()
         if sm < (12, 0):
             raise RuntimeError(
-                f"pulid-flux2-klein-fp4 requires Blackwell GPU (sm_120+), "
-                f"got sm_{sm[0]}{sm[1]}."
+                f"pulid-flux2-klein-fp4 requires Blackwell GPU (sm_120+), got sm_{sm[0]}{sm[1]}."
             )
         cuda_ver = torch.version.cuda
         if cuda_ver and int(cuda_ver.split(".")[0]) < 13:
@@ -118,7 +117,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         from diffusers import Flux2KleinPipeline
 
-        from imagecli.engines.flux2_klein_fp4 import _runtime_quantize_transformer_to_nvfp4
+        from imagecli.engines.nvfp4_quantize import runtime_quantize_transformer_to_nvfp4
 
         logger.info("Loading Flux2Klein BF16 base for PuLID-FP4…")
         self._pipe = Flux2KleinPipeline.from_pretrained(
@@ -127,11 +126,11 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         )
 
         # Runtime-quantize transformer to NVFP4 — weights are moved to CUDA
-        # layer-by-layer inside _runtime_quantize_transformer_to_nvfp4, so no
+        # layer-by-layer inside runtime_quantize_transformer_to_nvfp4, so no
         # explicit transformer.to("cuda") is needed before quantization. This
         # avoids a ~10 GB BF16 peak that would occur if the full transformer
         # were moved to GPU before quantization begins.
-        n_quantized = _runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)  # type: ignore[union-attr]
+        n_quantized = runtime_quantize_transformer_to_nvfp4(self._pipe.transformer)  # type: ignore[union-attr]
         logger.info("Runtime-quantized %d linear layers to NVFP4.", n_quantized)
 
         # Move remaining non-linear params (norms, biases, embeddings) to CUDA.
