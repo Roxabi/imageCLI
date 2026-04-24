@@ -2,12 +2,21 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# ALLOWLIST — edit requires ADR-047 update.
 ALLOWLIST=(
   "src/imagecli/nats/adapter.py"
   "tests/nats/test_adapter.py"
 )
 
-HITS=$(grep -rln -E "lyra\.[a-zA-Z_]+\." src/ tests/ --include='*.py' || true)
+set +e
+HITS=$(grep -rln -E "lyra\.[a-zA-Z_]+\." src/ tests/ --include='*.py')
+rc=$?
+set -e
+# grep exit codes: 0 = matches, 1 = no matches, 2+ = error
+if [ "$rc" -ge 2 ]; then
+  echo "ERROR: grep failed with exit code $rc (unreadable directory or bad pattern)" >&2
+  exit "$rc"
+fi
 
 VIOLATORS=()
 while IFS= read -r file; do
