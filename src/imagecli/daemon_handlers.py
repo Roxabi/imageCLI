@@ -2,7 +2,11 @@
 
 Split out of `daemon.py` to keep both files under the repo's 300 LOC gate.
 Wire protocol (`_send_json`) lives in `daemon.py` and is imported here.
-Model loaders live in `daemon.py` (called once at startup).
+
+Model loaders (`load_pipe`, `load_encoder`, `_check_vram`) also live in `daemon.py`
+— the spec (issue #59) originally placed them here, but keeping them with the
+server lifecycle (where they are called once at startup from `daemon_main`)
+holds both files under the 300 LOC gate without introducing a third module.
 """
 
 from __future__ import annotations

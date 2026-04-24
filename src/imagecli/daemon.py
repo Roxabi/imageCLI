@@ -22,9 +22,11 @@ from pathlib import Path
 SOCKET_PATH = Path.home() / ".local" / "share" / "imagecli" / "daemon.sock"
 _DEFAULT_TIMEOUT = 600  # seconds — large batches can take time
 
-# Minimum free VRAM required before loading each component (GB)
-_VRAM_TRANSFORMER_VAE = 4.5
-_VRAM_TEXT_ENCODER = 8.0
+# Actions whose handlers stream `{"progress": ...}` lines before the final `{"ok": ...}`.
+# `daemon_request` routes these through `_recv_generate` so intermediate lines are
+# drained and the final status is actually returned. `blend` is excluded because
+# `_handle_blend` emits a single `{"ok": ...}` response with no progress lines.
+_STREAMING_ACTIONS = frozenset({"generate", "encode"})
 
 
 # ── Public client API ─────────────────────────────────────────────────────────
@@ -33,15 +35,15 @@ _VRAM_TEXT_ENCODER = 8.0
 def daemon_request(request: dict, timeout: int = _DEFAULT_TIMEOUT) -> dict:
     """Send a JSON request to the daemon and return the response dict.
 
-    For 'generate' actions, reads multiple lines until one has an 'ok' key.
-    Progress lines (containing 'progress' key) are printed to stdout.
+    For streaming actions (generate, encode, blend), reads multiple lines until one
+    has an 'ok' key; progress lines (with a 'progress' key) are printed to stdout.
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
         sock.connect(str(SOCKET_PATH))
         _send_json(sock, request)
-        if request.get("action") == "generate":
+        if request.get("action") in _STREAMING_ACTIONS:
             return _recv_generate(sock)
         return _recv_json(sock)
     finally:
@@ -126,6 +128,11 @@ def daemon_main(engine: str = "flux2-klein") -> None:
 
 
 # ── Model loaders (called once from daemon_main at startup) ───────────────────
+
+
+# Minimum free VRAM required before loading each component (GB)
+_VRAM_TRANSFORMER_VAE = 4.5
+_VRAM_TEXT_ENCODER = 8.0
 
 
 def _check_vram(needed_gb: float, label: str) -> None:
