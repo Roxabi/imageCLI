@@ -17,7 +17,8 @@ from imagecli.engine import (
 from imagecli.markdown import PromptDoc, parse_prompt_file
 
 # Ensure library consumers don't get unsuppressable stderr output from
-# logger.warning() calls in engine.py when they haven't configured logging.
+# logger.warning() / logger.info() calls in engine_helpers/engine_base when
+# they haven't configured logging.
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [

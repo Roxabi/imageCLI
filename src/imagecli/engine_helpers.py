@@ -14,7 +14,10 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from imagecli.engine_base import ImageEngine
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +65,7 @@ def get_compute_capability() -> tuple[int, int]:
 
 
 def warn_ignored_params(
-    engine,
+    engine: ImageEngine,
     negative_prompt: str,
     steps: int,
     guidance: float,

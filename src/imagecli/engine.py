@@ -12,14 +12,17 @@ from imagecli.engine_helpers import (
     get_compute_capability,
     warn_ignored_params,
 )
-from imagecli.engine_registry import _get_registry, get_engine, list_engines
+from imagecli.engine_registry import (
+    _get_registry,  # noqa: F401 — re-exported for existing callers (tests/test_engine.py)
+    get_engine,
+    list_engines,
+)
 
 __all__ = [
     "EngineCapabilities",
     "ImageEngine",
     "InsufficientResourcesError",
     "MIN_FREE_RAM_GB",
-    "_get_registry",
     "get_compute_capability",
     "get_engine",
     "list_engines",
