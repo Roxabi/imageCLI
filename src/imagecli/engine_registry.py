@@ -51,6 +51,11 @@ def get_engine(
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
     if loras is not None:
+        if lora_path is not None or trigger is not None or embedding_path is not None:
+            raise ValueError(
+                "Pass either loras= or the singular fields "
+                "(lora_path / lora_scale / trigger / embedding_path), not both."
+            )
         return registry[name](compile=compile, loras=loras)
     return registry[name](
         compile=compile,
