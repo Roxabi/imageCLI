@@ -187,18 +187,33 @@ def test_get_engine_invalid():
 
 
 def test_get_engine_rejects_loras_and_lora_path_combo():
+    # Arrange / Act / Assert
     with pytest.raises(ValueError, match="not both"):
         get_engine("flux2-klein", loras=[LoraSpec("/a")], lora_path="/x")
 
 
 def test_get_engine_rejects_loras_and_trigger_combo():
+    # Arrange / Act / Assert
     with pytest.raises(ValueError, match="not both"):
         get_engine("flux2-klein", loras=[LoraSpec("/a")], trigger="t")
 
 
 def test_get_engine_rejects_loras_and_embedding_path_combo():
+    # Arrange / Act / Assert
     with pytest.raises(ValueError, match="not both"):
         get_engine("flux2-klein", loras=[LoraSpec("/a")], embedding_path="/e")
+
+
+def test_get_engine_accepts_loras_only():
+    # Arrange
+    specs = [LoraSpec("/a")]
+
+    # Act
+    engine = get_engine("flux2-klein", loras=specs)
+
+    # Assert
+    assert isinstance(engine, ImageEngine)
+    assert engine.loras == specs
 
 
 def test_list_engines():

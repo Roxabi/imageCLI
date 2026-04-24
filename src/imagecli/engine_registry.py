@@ -54,7 +54,7 @@ def get_engine(
         if lora_path is not None or trigger is not None or embedding_path is not None:
             raise ValueError(
                 "Pass either loras= or the singular fields "
-                "(lora_path / lora_scale / trigger / embedding_path), not both."
+                "(lora_path / trigger / embedding_path), not both."
             )
         return registry[name](compile=compile, loras=loras)
     return registry[name](
