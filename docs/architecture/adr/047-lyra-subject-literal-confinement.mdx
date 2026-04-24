@@ -1,0 +1,89 @@
+---
+title: "ADR-047: Lyra NATS subject literal confinement"
+description: Confine lyra.* NATS subject string literals to designated adapter modules, enforced by a CI gate, to preserve contract stability and single-source-of-truth for the wire API.
+---
+
+## Status
+
+Accepted
+
+## Context
+
+ADR-046 freezes the NATS contract between the Lyra hub and imageCLI's `ImageNatsAdapter`. The contract is expressed as NATS subject strings (`lyra.image.generate.request`, `lyra.image.heartbeat`). These strings are the wire API: any drift between what the adapter publishes and what the hub subscribes to is a silent runtime breakage with no compile-time signal.
+
+As the codebase grows — tests, CLI commands, batch scripts, utilities — the risk of subject strings appearing in multiple files increases. Each copy is an independent drift point. A test that hard-codes `lyra.image.generate.request` but is not updated when the subject changes will pass locally while the integration silently breaks.
+
+Two prior patterns in the Roxabi stack informed this decision:
+
+- **Voice adapters (ADR-039, ADR-044):** STT/TTS subject strings are defined once in each adapter and referenced nowhere else in the package. This worked by convention, not enforcement.
+- **`contract_version` field:** Defined by ADR-044 as an additive, one-way field emitted by producers. The same principle applies here — producers own the subject strings, consumers must not re-invent them.
+
+The need for a formal rule arose when the PR adding `ImageNatsAdapter` introduced tests that referenced subject strings directly. Without a gate, the convention is invisible to new contributors.
+
+## Options Considered
+
+### Option A: Confinement by convention only
+
+Document that `lyra.*` subject literals belong in the adapter module. Rely on code review to catch violations.
+
+- **Pros:** Zero tooling. No CI overhead. Reviewers who know the codebase enforce it.
+- **Cons:** Convention is invisible to new contributors. Code review misses literals in test files. No machine enforcement means the rule degrades silently under time pressure.
+
+### Option B: Constants module with import enforcement
+
+Define subject strings as module-level constants in a `subjects.py` (or `constants.py`) module. Import them everywhere. Enforce via a linter rule that bans bare `lyra.` string literals.
+
+- **Pros:** Fully type-safe. IDE navigation works. Grep for the constant name finds all usages.
+- **Cons:** Adds a module whose sole purpose is to hold strings — over-engineering for a 2-subject contract. Import enforcement requires a custom ruff plugin or semgrep rule, which is heavier than the problem warrants. Tests still need to import from the constants module, creating coupling between test and implementation layers.
+
+### Option C: Adapter-confined literals with CI allowlist gate (chosen)
+
+Define subject strings only inside designated adapter modules. A CI shell script (`scripts/check-lyra-literals.sh`) greps for the `lyra.<tok>.` pattern across `src/` and `tests/`. Any file containing the pattern that is not in an explicit allowlist fails the build. Adding a new designated module requires an explicit allowlist entry, which per the error message requires an ADR.
+
+- **Pros:** Enforcement is mechanical and visible (CI fails, exact file named). Allowlist is the authoritative list of modules that legitimately own subject strings. Scope is narrow — only NATS-shaped subjects (`lyra.<tok>.`) not arbitrary string matches. Low tooling cost.
+- **Cons:** Does not catch string-concat bypasses (`"lyra" + ".image..."`) or f-string interpolation (`f"lyra.{topic}.request"`). Allowlist requires manual maintenance. A new designated module requires a human decision (ADR) rather than being automatic.
+
+## Decision
+
+**Option C: adapter-confined literals with CI allowlist gate.**
+
+The decision encodes three rules:
+
+- **Rule 1:** `lyra.*` NATS subject strings are defined exactly once, in the designated adapter module for that satellite.
+- **Rule 2:** Tests that need to reference subject strings must import from the adapter or use a test fixture — not repeat the literal. If tests appear in the allowlist, it is because they test the adapter's own subject declarations, not because they independently define subjects.
+- **Rule 3:** Adding a new file to the allowlist requires this ADR to be updated (or a successor ADR to be created) documenting why a new module is a designated subject owner.
+
+Initial allowlist:
+
+```
+src/imagecli/nats/adapter.py       — ImageNatsAdapter (primary owner)
+tests/nats/test_adapter.py         — adapter unit tests (tests subject string itself)
+```
+
+The CI gate (`scripts/check-lyra-literals.sh`) runs after Lint and before Test in the `ci` job.
+
+## Consequences
+
+### Positive
+
+- Subject string drift between adapter and tests becomes a CI failure, not a silent runtime bug.
+- The allowlist is the authoritative, auditable list of modules that legitimately touch subject literals.
+- New contributors see a clear error message pointing to the ADR process.
+- The gate is self-documenting: the error output names the violating file and the remediation path.
+
+### Negative
+
+- String-concat and f-string subject construction are not caught. A determined bypass succeeds silently.
+- The allowlist requires manual maintenance. A refactor that renames or moves the adapter module will break CI until the allowlist is updated — this is intentional (the failure prompts an ADR update) but adds friction.
+- The gate adds one shell process to CI. Negligible in absolute terms.
+
+### Neutral
+
+- Tests in the allowlist are explicitly permitted to reference subject literals because they test the adapter's own declarations. This is not a violation of Rule 2 — it is the adapter's test module exercising the adapter's interface.
+- Future satellites (e.g., a video generation adapter) that define their own `lyra.*` subjects must add their adapter module to this allowlist and update this ADR.
+
+## Relation to other ADRs
+
+- **ADR-046** — imageCLI NATS ingress contract. Defines the subjects this rule governs.
+- **ADR-044** — Voice NATS contract. Establishes `contract_version` and subject conventions that set the precedent for single-source subject ownership.
+- **ADR-039** — STT/TTS adapter decoupling. Establishes the satellite pattern whose informal convention this ADR formalizes.

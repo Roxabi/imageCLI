@@ -18,6 +18,10 @@ jobs:
         run: uv run ruff check .
       - name: Typecheck
         run: uv run ruff check --select=PYI .
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
+      - name: Check lyra.* literals outside designated adapter
+        run: bash scripts/check-lyra-literals.sh
       - name: Test
         run: uv run pytest
 
