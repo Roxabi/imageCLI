@@ -16,6 +16,143 @@ from imagecli.engine import (
     list_engines,
     preflight_check,
 )
+from imagecli.lora_spec import LoraSpec
+
+
+# ── DummyEngine — minimal concrete subclass for __init__ shim tests ──────────
+
+
+class DummyEngine(ImageEngine):
+    name = "dummy"
+    description = "Test stub"
+    model_id = "test/model"
+    vram_gb = 8.0
+
+    def _load(self) -> None:  # no-op
+        pass
+
+
+# ── ImageEngine.__init__ — loras= plural form ────────────────────────────────
+
+
+def test_engine_init_loras_plural_two():
+    # Arrange / Act
+    engine = DummyEngine(loras=[LoraSpec("/a"), LoraSpec("/b", scale=0.5)])
+
+    # Assert: loras list has 2 elements
+    assert len(engine.loras) == 2
+    assert engine.loras[0] == LoraSpec("/a")
+    assert engine.loras[1] == LoraSpec("/b", scale=0.5)
+
+    # Singular attrs are None/1.0 when N != 1
+    assert engine.lora_path is None
+    assert engine.lora_scale == 1.0
+    assert engine.trigger is None
+    assert engine.embedding_path is None
+
+
+def test_engine_init_loras_plural_empty():
+    # Arrange / Act
+    engine = DummyEngine(loras=[])
+
+    # Assert: empty list is accepted; singular attrs are default
+    assert engine.loras == []
+    assert engine.lora_path is None
+    assert engine.lora_scale == 1.0
+    assert engine.trigger is None
+    assert engine.embedding_path is None
+
+
+# ── ImageEngine.__init__ — singular form ─────────────────────────────────────
+
+
+def test_engine_init_singular_lora_path_only():
+    # Arrange / Act
+    engine = DummyEngine(lora_path="/a")
+
+    # Assert: loras is a one-element list built from the singular kwargs
+    assert engine.loras == [LoraSpec("/a", 1.0, None, None)]
+
+    # Singular backward-compat attrs must be populated from that spec
+    assert engine.lora_path == "/a"
+    assert engine.lora_scale == 1.0
+    assert engine.trigger is None
+    assert engine.embedding_path is None
+
+
+def test_engine_init_singular_all_fields():
+    # Arrange / Act
+    engine = DummyEngine(lora_path="/a", lora_scale=0.5, trigger="t", embedding_path="/e")
+
+    # Assert: spec is built from all four singular kwargs
+    assert engine.loras == [LoraSpec("/a", 0.5, "t", "/e")]
+    assert engine.lora_path == "/a"
+    assert engine.lora_scale == 0.5
+    assert engine.trigger == "t"
+    assert engine.embedding_path == "/e"
+
+
+# ── ImageEngine.__init__ — no args ───────────────────────────────────────────
+
+
+def test_engine_init_no_args():
+    # Arrange / Act
+    engine = DummyEngine()
+
+    # Assert: empty loras, all singular attrs default
+    assert engine.loras == []
+    assert engine.lora_path is None
+    assert engine.lora_scale == 1.0
+    assert engine.trigger is None
+    assert engine.embedding_path is None
+
+
+# ── ImageEngine.__init__ — _UNSET sentinel semantics ─────────────────────────
+
+
+def test_engine_init_lora_scale_unset_does_not_trigger_mixed_guard():
+    # Arrange: loras= passed, lora_scale NOT passed → _UNSET → no mixed-form violation
+    engine = DummyEngine(loras=[LoraSpec("/a")])
+
+    # Assert: no ValueError raised; loras populated correctly
+    assert engine.loras == [LoraSpec("/a")]
+
+
+def test_engine_init_lora_scale_explicit_one_with_loras_raises():
+    # Arrange: lora_scale=1.0 passed EXPLICITLY alongside loras= → mixed form
+    # _UNSET sentinel exists to detect this case; lora_scale=1.0 is NOT the same
+    # as lora_scale not passed.
+    with pytest.raises(ValueError, match="loras="):
+        DummyEngine(loras=[LoraSpec("/a")], lora_scale=1.0)  # type: ignore[call-overload]
+
+
+# ── ImageEngine.__init__ — mixed-form raises ValueError ──────────────────────
+
+
+def test_engine_init_mixed_form_loras_and_lora_path_raises():
+    # Arrange / Act / Assert
+    with pytest.raises(ValueError, match="loras="):
+        DummyEngine(loras=[LoraSpec("/a")], lora_path="/x")  # type: ignore[call-overload]
+
+
+def test_engine_init_mixed_form_loras_and_trigger_raises():
+    with pytest.raises(ValueError, match="loras="):
+        DummyEngine(loras=[LoraSpec("/a")], trigger="t")  # type: ignore[call-overload]
+
+
+def test_engine_init_mixed_form_loras_and_embedding_path_raises():
+    with pytest.raises(ValueError, match="loras="):
+        DummyEngine(loras=[LoraSpec("/a")], embedding_path="/e")  # type: ignore[call-overload]
+
+
+def test_engine_init_mixed_form_error_message_mentions_both_forms():
+    # Assert: error message mentions both loras= and the singular fields
+    with pytest.raises(ValueError) as exc_info:
+        DummyEngine(loras=[LoraSpec("/a")], lora_path="/x")  # type: ignore[call-overload]
+
+    msg = str(exc_info.value)
+    # Message should guide the user toward one form or the other
+    assert "loras=" in msg or "lora_path" in msg
 
 
 def test_registry_has_all_engines():

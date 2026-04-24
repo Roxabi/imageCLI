@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 
 from imagecli.engine_base import ImageEngine
+from imagecli.lora_spec import LoraSpec
 
 
 def _get_registry() -> dict[str, type[ImageEngine]]:
@@ -37,6 +38,9 @@ def get_engine(
     name: str,
     *,
     compile: bool = True,
+    loras: list[LoraSpec] | None = None,
+    # Legacy singular kwargs — kept for backward compatibility with callers that
+    # haven't migrated yet. Mutually exclusive with loras=.
     lora_path: str | None = None,
     lora_scale: float = 1.0,
     trigger: str | None = None,
@@ -46,6 +50,8 @@ def get_engine(
     if name not in registry:
         known = ", ".join(registry)
         raise ValueError(f"Unknown engine {name!r}. Available: {known}")
+    if loras is not None:
+        return registry[name](compile=compile, loras=loras)
     return registry[name](
         compile=compile,
         lora_path=lora_path,
