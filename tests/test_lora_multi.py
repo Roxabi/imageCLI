@@ -330,3 +330,91 @@ def test_fp4_guard_does_not_fire_when_no_loras():
 
     # Guard did not block; pipe was assigned
     assert engine._pipe is not None
+
+
+# ── end-to-end wiring: markdown → resolve_loras → engine → pivotal ───────────
+
+
+def test_e2e_multi_lora_wiring(tmp_path):
+    """Build PromptDoc with 2 LoraSpecs, resolve (no CLI override),
+    construct Flux2KleinEngine, invoke _load_pipeline (stubbed), assert:
+    - adapters loaded N=2 with distinct names
+    - set_adapters called with both names and matching weights
+    - apply_pivotals_to_pipe received list[PivotalEmbedding] of length 2
+    """
+    from imagecli.commands._helpers import resolve_loras
+    from imagecli.engines.flux2_klein import Flux2KleinEngine
+    from imagecli.lora_spec import LoraSpec
+    from imagecli.pivotal_load import PivotalEmbedding
+
+    # 1. Build 2 LoraSpecs as if they came from frontmatter (with triggers so
+    #    _apply_pivotal_embeddings has something to process).
+    fm_loras = [
+        LoraSpec(path="/lora/a.safetensors", scale=0.8, trigger="triggerA"),
+        LoraSpec(path="/lora/b.safetensors", scale=1.2, trigger="triggerB"),
+    ]
+
+    # 2. resolve_loras with empty CLI args — must pass FM list through unchanged.
+    resolved = resolve_loras([], [], [], [], fm_loras)
+    assert resolved == list(fm_loras)
+
+    # 3. Construct engine with the resolved specs.
+    engine = Flux2KleinEngine(loras=resolved)
+    pipe = _make_mock_pipe()
+
+    # 4. Fake PivotalEmbedding objects (dataclass — all required fields). vectors
+    #    and source_path are stubs; apply_pivotals_to_pipe is also stubbed so
+    #    only the list length / isinstance check matters.
+    fake_emb_a = PivotalEmbedding(
+        trigger="triggerA",
+        vectors=MagicMock(),
+        num_tokens=1,
+        source="merged",
+        source_path=tmp_path / "a.safetensors",
+    )
+    fake_emb_b = PivotalEmbedding(
+        trigger="triggerB",
+        vectors=MagicMock(),
+        num_tokens=1,
+        source="merged",
+        source_path=tmp_path / "b.safetensors",
+    )
+
+    apply_pivotals_calls: list = []
+
+    def _fake_apply_pivotals(pipe_arg, pivotals):
+        apply_pivotals_calls.append(pivotals)
+
+    # 5. Run _load_pipeline with:
+    #    - heavy sys.modules stubbed (same pattern as _run_klein_load_pipeline)
+    #    - load_pivotal_embedding returning fake embeddings per spec
+    #    - apply_pivotals_to_pipe captured instead of patched away
+    #    - _patch_encode_prompt suppressed (side-effect on pipe not needed here)
+    #
+    # load_pivotal_embedding and apply_pivotals_to_pipe are imported inside
+    # _apply_pivotal_embeddings() via "from imagecli.pivotal import ...", so we
+    # patch at the imagecli.pivotal namespace which is what the from-import
+    # resolves at call time.
+    fake_embs_iter = iter([fake_emb_a, fake_emb_b])
+
+    with (
+        patch.dict(sys.modules, _klein_sys_modules(pipe)),
+        patch("imagecli.pivotal.load_pivotal_embedding", side_effect=lambda *a, **kw: next(fake_embs_iter)),
+        patch("imagecli.pivotal.apply_pivotals_to_pipe", side_effect=_fake_apply_pivotals),
+        patch("imagecli.pivotal._patch_encode_prompt"),
+    ):
+        engine._load_pipeline()
+
+    # 6. Assert LoRA adapter wiring.
+    lora_calls = pipe.load_lora_weights.call_args_list
+    assert len(lora_calls) == 2
+    assert lora_calls[0] == call("/lora/a.safetensors", adapter_name="lora_0")
+    assert lora_calls[1] == call("/lora/b.safetensors", adapter_name="lora_1")
+
+    pipe.set_adapters.assert_called_once_with(["lora_0", "lora_1"], adapter_weights=[0.8, 1.2])
+
+    # 7. Assert pivotal apply received exactly 2 PivotalEmbedding objects.
+    assert len(apply_pivotals_calls) == 1, "apply_pivotals_to_pipe must be called exactly once"
+    pivotals_arg = apply_pivotals_calls[0]
+    assert len(pivotals_arg) == 2
+    assert all(isinstance(p, PivotalEmbedding) for p in pivotals_arg)
