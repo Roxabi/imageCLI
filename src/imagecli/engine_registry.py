@@ -5,6 +5,7 @@ the ABC module doesn't transitively import every concrete engine on startup.
 from __future__ import annotations
 
 import dataclasses
+import warnings
 
 from imagecli.engine_base import ImageEngine
 from imagecli.lora_spec import LoraSpec
@@ -57,6 +58,14 @@ def get_engine(
                 "(lora_path / trigger / embedding_path), not both."
             )
         return registry[name](compile=compile, loras=loras)
+    # TODO(v0.next-minor+1): remove legacy singular-kwargs branch after one release cycle.
+    if lora_path is not None or trigger is not None or embedding_path is not None:
+        warnings.warn(
+            "get_engine singular LoRA kwargs (lora_path, lora_scale, trigger, "
+            "embedding_path) are deprecated; pass loras=list[LoraSpec] instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     return registry[name](
         compile=compile,
         lora_path=lora_path,
