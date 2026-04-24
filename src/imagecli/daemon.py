@@ -35,7 +35,7 @@ _STREAMING_ACTIONS = frozenset({"generate", "encode"})
 def daemon_request(request: dict, timeout: int = _DEFAULT_TIMEOUT) -> dict:
     """Send a JSON request to the daemon and return the response dict.
 
-    For streaming actions (generate, encode, blend), reads multiple lines until one
+    For streaming actions (see `_STREAMING_ACTIONS`), reads multiple lines until one
     has an 'ok' key; progress lines (with a 'progress' key) are printed to stdout.
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
