@@ -1,0 +1,68 @@
+---
+title: Split src/imagecli/engines/pulid_flux1_dev.py (569 LOC)
+issue: 55
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/engines/pulid_flux1_dev.py` is 569 LOC — over the 300 LOC
+quality_gates threshold installed in #53. The file mixes three concerns:
+
+1. Inlined PuLID `nn.Module` classes — `_PerceiverAttention`, `_IDFormer`,
+   `_PerceiverAttentionCA`, `_PuLIDFlux1` (plus `_reshape_tensor`,
+   `_FeedForward`).
+2. Transformer monkey-patching helpers — `_patch_flux1` that rewrites
+   FLUX.1-dev double-block forwards to inject PuLID CA.
+3. The engine class `PuLIDFlux1DevEngine` — orchestration, model loading,
+   generation, cleanup.
+
+The file is currently exempted in `tools/file_exemptions.txt`; the
+exemption should go away once the split lands. Extract (1) and (2) into
+sibling modules under `src/imagecli/engines/_pulid/` so the engine class
+becomes a thin consumer.
+
+## Who
+
+- **Primary:** imageCLI maintainer (Mickael) — needs the quality-gate
+  threshold to stay meaningful; every exemption erodes the signal.
+- **Secondary:** future contributors debugging PuLID face-lock behavior —
+  separated `nn.Module` definitions and patching helpers are easier to
+  audit than a 570-line mixed module.
+
+## Constraints
+
+- Must not change PuLID v0.9.1 face-lock behavior — golden-image
+  regression test with fixed seed required (noted in issue audit).
+- VRAM usage unchanged within ±0.2 GB tolerance.
+- PuLID patching references module classes directly and carries subtle
+  per-forward-pass VRAM state — extraction must preserve forward-method
+  capture semantics (cannot `torch.compile`, as documented in CLAUDE.md).
+- Merge order: parent is #53 (quality gates); sibling refactors #54
+  (cli.py), #57 (engine.py) are already merged or in-flight — keep this
+  diff focused.
+- Ruff L≤100, py312, quality_gates pass (lint + typecheck + tests).
+
+## Out of Scope
+
+- No behavioral changes to PuLID v0.9.1 face-lock output.
+- No refactor of `pulid_flux2_klein.py` (separate engine, separate
+  issue if needed).
+- No changes to GGUF loading or InsightFace AntelopeV2 paths.
+- No new PuLID features, strengths, or config knobs.
+- No CLI UX changes.
+
+## Complexity
+
+**Tier: F-lite** — clear structural split within a single domain,
+mechanical extraction of self-contained `nn.Module` classes + one
+patching helper, no architectural unknowns. The regression-test
+requirement raises verification effort but not design effort.
+
+Signals:
+- Single domain (Python package internals, PuLID engine).
+- ≤5 files touched (1 split source → 3–4 new modules under `_pulid/`).
+- No new patterns or arch; purely moving code.
+- Label: `size:F-lite`.
