@@ -20,6 +20,8 @@ jobs:
         run: uv run ruff check --select=PYI .
       - name: Test
         run: uv run pytest
+      - name: Check lyra.* literals outside designated adapter
+        run: bash scripts/check-lyra-literals.sh
 
   secrets:
     name: Secret scan
