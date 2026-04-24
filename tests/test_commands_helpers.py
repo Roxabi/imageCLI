@@ -149,3 +149,9 @@ def test_resolve_loras_empty_cli_empty_fm_returns_empty() -> None:
     """Both empty → empty list, no error."""
     result = resolve_loras([], [], [], [], [])
     assert result == []
+
+
+def test_resolve_loras_empty_string_trigger_coerces_to_none() -> None:
+    """Pairwise empty-string trigger → None (not "")."""
+    result = resolve_loras(["/a.safetensors"], [], [""], [], [])
+    assert result[0].trigger is None

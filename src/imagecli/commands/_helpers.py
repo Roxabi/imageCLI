@@ -65,7 +65,7 @@ def resolve_loras(
             LoraSpec(
                 path=path,
                 scale=cli_scales[i] if cli_scales else 1.0,
-                trigger=cli_triggers[i] if cli_triggers else None,
+                trigger=(cli_triggers[i] or None) if cli_triggers else None,
                 embedding_path=cli_embeddings[i] if cli_embeddings else None,
             )
         )
