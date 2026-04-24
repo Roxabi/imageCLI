@@ -1,0 +1,54 @@
+---
+title: Multi-LoRA stacking with independent pivotal embeddings
+issue: 34
+status: approved
+tier: F-full
+date: 2026-04-24
+---
+
+## Problem
+
+The pivotal tuning embedding support shipped in #31 / PR #32 handles exactly one LoRA with one pivotal trigger per engine load. The original frame (`artifacts/frames/31-pivotal-tuning-embeddings-frame.mdx`) explicitly scoped out the multi-LoRA case:
+
+> Multi-LoRA stacking with independent embeddings — acknowledged but not solved here. Interface should not preclude it.
+
+Users cannot today generate a single image that composes two (or more) ai-toolkit pivotal-tuned identities (e.g., `lyraface` + `mickface` in the same scene). Triggering both would require sequential generations + manual compositing, which defeats the purpose of identity-locked LoRAs.
+
+This issue tracks the deferred work: lift the singular-LoRA assumption across CLI surface, engine state, pivotal application loop, tokenizer collision check, and round-trip verification — while keeping the N=1 path (today's only used path) unchanged.
+
+## Who
+
+- **Primary:** users of `flux2-klein` / `flux2-klein-fp8` / `flux2-klein-fp4` who have trained ≥2 pivotal LoRAs via ai-toolkit and want to compose them in a single generation. The motivating downstream is Lyra (multi-agent image gen) or any scenario needing two identity-locked subjects in one frame.
+- **Secondary:**
+  - Future engines that opt into pivotal support via the base-class hook (the interface change is the contract they inherit).
+  - CLI users of the singular `--lora` / `--trigger` flags — must not regress (backward compat).
+
+## Constraints
+
+- **Backward compat non-negotiable.** Singular CLI (`--lora PATH --trigger NAME`) and singular frontmatter (`lora_path`, `trigger`, `embedding_path`) must keep working unchanged. No flag day for existing prompts.
+- **Atomic tokenizer collision check.** The pre-check added in PR #32 review validates a single trigger against the whole vocab before any mutation. Multi-LoRA must extend this to validate the full set (across all new triggers + existing vocab) atomically — either all triggers are added or none.
+- **Per-LoRA round-trip assertion.** The `atol=5e-2` embedding round-trip check must run once per LoRA after its pivotal apply. Failure of any one aborts the whole load (same fail-closed semantics as today).
+- **Idempotent encoder patch.** `_patch_encode_prompt` monkey-patches the pipeline's `encode_prompt`. Must guard against double-patching when N LoRAs are loaded sequentially.
+- **Hook point localized.** All three Klein variants (`flux2-klein`, `flux2-klein-fp4`, `flux2-klein-fp8`) funnel through the base-class `_apply_pivotal_embeddings()` after the #57 split — the refactor lives there, not per-engine.
+- **LoRA fusion ordering unchanged.** LoRAs are fused into the base *before* FP8 quant (quanto/torchao). Multi-LoRA must fuse each in order before quantization; FP4 (pre-quantized) remains unsupported, same as today.
+- **FP4 engines stay excluded.** `flux2-klein-fp4` uses pre-quantized weights — LoRA fusion unsupported for single or multi.
+
+## Out of Scope
+
+- **Multi-LoRA without pivotal embeddings.** A separate, simpler feature (just iterate `load_lora_weights` + `fuse_lora`). Filed separately if needed.
+- **Per-LoRA scale tuning at inference time beyond what the spec already supports.** Each `LoraSpec` carries a `scale`; no runtime scale-sweep APIs.
+- **Hot-swapping LoRAs mid-generation.** Engine load is still one-shot; unloading / replacing LoRAs during a batch is out.
+- **FP4 LoRA support.** `flux2-klein-fp4` stays LoRA-unsupported (no fusion into pre-quantized weights).
+- **Arbitrary stack depth.** Target N ≤ 3 in practice. Beyond that, tokenizer / embedding dim pressure and VRAM considerations are a separate conversation.
+- **Non-Klein engines.** `flux1-dev`, `flux1-schnell`, `sd35`, `pulid-*` variants are not in scope — pivotal path is Klein-only today.
+
+## Complexity
+
+**Tier: F-full** — CLI surface change + engine state refactor + pivotal subsystem loop extension + cross-engine test matrix + backward-compat shim. Multi-file, multi-layer; spans CLI parsing, frontmatter schema, engine `__init__`, pivotal.py, and tests.
+
+Signals observed:
+- Multiple domains: CLI (typer args), markdown schema, engine base class, pivotal module, tokenizer integration.
+- New data model: `LoraSpec` tuple/dataclass as the canonical internal representation, with a compat shim from singular flags.
+- Cross-engine impact: base-class change affects all three Klein variants.
+- Non-trivial correctness invariants: atomic tokenizer mutation, idempotent patching, per-LoRA round-trip.
+- Issue label `size:F-full` (explicit).
