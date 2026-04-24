@@ -1,0 +1,236 @@
+---
+title: "Multi-LoRA stacking with independent pivotal embeddings"
+description: "Deep technical analysis of how to lift the singular-LoRA-with-singular-trigger assumption across CLI, frontmatter, engine state, and pivotal apply loop."
+issue: 34
+frame: artifacts/frames/34-multi-lora-pivotal-stacking-frame.mdx
+tier: F-full
+date: 2026-04-24
+---
+
+## Source
+
+> "Multi-LoRA stacking with independent embeddings. If a user passes multiple `--lora` flags in the future, each might have its own embedding — acknowledged but not solved here. Interface should not preclude it."
+>
+> — `artifacts/frames/31-pivotal-tuning-embeddings-frame.mdx`, scope boundary carried forward into GitHub issue #34.
+
+## Problem
+
+Today, `ImageEngine.__init__` accepts four singular fields (`lora_path`, `lora_scale`, `trigger`, `embedding_path`). Exactly one ai-toolkit pivotal-tuned LoRA can be loaded per engine instance. The CLI (`generate.py`, `batch.py`), the markdown frontmatter parser (`markdown.py`), and the engine base class all hardcode this assumption. To compose two identity-locked LoRAs in a single generation, a user would have to generate twice and composite externally — defeating the purpose of pivotal tuning, which precisely trains identity-specific text-encoder vectors that must be present at generation time.
+
+The Klein engines (`flux2-klein`, `flux2-klein-fp8`, `flux2-klein-fp4`) are the only pivotal-capable engines today. After the #57 refactor, they all route through the base-class `_apply_pivotal_embeddings()`. That is the right seam for the change, but the LoRA-fuse path lives in each engine's `_load_pipeline` (only `flux2-klein` shown here — `fp8` and `fp4` mirror it with different quantization). Any multi-LoRA shape touches **both** seams: engine `_load_pipeline` (fuse N LoRAs) and base `_apply_pivotal_embeddings` (apply N pivotals).
+
+FP4 is LoRA-unsupported today (pre-quantized weights cannot fuse), and stays so regardless of shape chosen — no change there.
+
+## Outcome
+
+Loading two distinct ai-toolkit pivotal LoRAs (e.g. `lyraface` + `mickface`) onto a `flux2-klein` engine succeeds with all invariants preserved: both triggers expand in the prompt, TE rows round-trip to stored vectors, tokenizer state is atomically consistent, the encoder patch is installed exactly once, and the singular CLI path (`--lora X --trigger Y`) still works byte-identically to today.
+
+## Appetite
+
+**F-full cycle** — single PR, ~2–3 days of focused work. The change is localized (engine_base + pivotal_apply + engine._load_pipeline + CLI + markdown + tests), but it touches a user-facing CLI surface and a correctness-critical loader, so tests are the long pole.
+
+## Files Impacted
+
+| File | Change |
+|---|---|
+| `src/imagecli/engine_base.py` | `__init__` signature + state field; `_apply_pivotal_embeddings` loop |
+| `src/imagecli/pivotal_apply.py` | Atomic multi-trigger pre-check; idempotent `_patch_encode_prompt` |
+| `src/imagecli/engines/flux2_klein.py` | `_load_pipeline`: iterate LoRAs before quantize |
+| `src/imagecli/engines/flux2_klein_fp8.py` | same — mirror Klein path |
+| `src/imagecli/engines/flux2_klein_fp4.py` | no LoRA support today; document explicit raise if `len(loras) > 1` |
+| `src/imagecli/markdown.py` | Add `loras:` list field; compat shim from `lora_path`/`trigger`/`embedding_path` |
+| `src/imagecli/commands/generate.py` | CLI surface for multi-LoRA |
+| `src/imagecli/commands/batch.py` | CLI surface for multi-LoRA |
+| `src/imagecli/commands/_helpers.py` | Threading change: pass `loras` list instead of singular fields |
+| `src/imagecli/commands/_batch_sequential.py` | Same threading change |
+| `tests/test_pivotal.py` (existing) | Extend for N=2 case |
+| `tests/test_markdown.py` (existing) | Extend for `loras:` list parsing |
+| `docs/lora.md` | Update with multi-LoRA docs |
+
+Estimated: ~8–10 source files touched, ~3–4 test files, ~1 doc.
+
+## Shapes
+
+### Shape A — Repeatable flags, positional-paired
+
+CLI accepts `--lora` N times, `--trigger` N times, `--lora-scale` N times, `--embedding` N times. Same indices pair up. Typer supports list options via `list[Path]` annotations.
+
+```
+imagecli generate prompt.md \
+  --lora /p/lyra.sft --trigger lyraface \
+  --lora /p/mick.sft --trigger mickface
+```
+
+Frontmatter unchanged or mirrored: `lora_path:`, `trigger:` become sequences.
+
+**Trade-offs:**
+- ✅ Minimal new syntax; repeat-flag is standard typer idiom.
+- ✅ Works with shell history / scripting — flag-value pairs.
+- ❌ Index-based pairing is fragile — mismatched counts (2 `--lora` + 3 `--trigger`) need explicit validation + a clear error.
+- ❌ Frontmatter with parallel lists (`lora_paths: [...]`, `triggers: [...]`) is syntactically ugly for >2 entries.
+- ❌ Per-LoRA `scale` / `embedding_path` optionality gets awkward — users have to pass `--lora-scale 1.0` for the default just to keep the index aligned.
+
+**Rough scope:** M
+
+### Shape B — Frontmatter-first `loras:` list, CLI stays singular
+
+Frontmatter gains a typed list:
+
+```yaml
+loras:
+  - path: /p/lyra.sft
+    trigger: lyraface
+    scale: 1.0
+  - path: /p/mick.sft
+    trigger: mickface
+    embedding_path: /p/mick_emb.sft
+```
+
+CLI keeps `--lora` / `--trigger` as singular (for the common 1-LoRA case). Multi-LoRA is a frontmatter-only feature.
+
+**Trade-offs:**
+- ✅ Clean per-LoRA grouping — each entry carries its own path/trigger/scale/embedding_path.
+- ✅ Smallest CLI surface change (zero: backward-compat trivially preserved).
+- ✅ Markdown is the natural home for richer gen config anyway (prompts already live there).
+- ❌ Multi-LoRA is invisible from the CLI — users who prefer inline config cannot stack.
+- ❌ "CLI override" semantics become asymmetric: `--lora X` on a prompt with `loras: [...]` — does it replace the whole list or just entry 0? Needs a policy call.
+
+**Rough scope:** S–M
+
+### Shape C — Frontmatter `loras:` list + repeatable CLI flags
+
+Both surfaces support multi-LoRA. CLI: repeat `--lora`, `--trigger`, `--lora-scale`, `--embedding` (Shape A semantics). Frontmatter: `loras: [...]` list (Shape B semantics). Singular CLI and singular frontmatter (`lora_path`, `trigger`, `embedding_path`) keep working as shorthand for N=1.
+
+**Trade-offs:**
+- ✅ Full symmetry — both surfaces express the same data model.
+- ✅ Backward compat via the N=1 shim (singular → single-element list internally).
+- ✅ Users can mix: frontmatter describes the default stack, CLI `--lora` appends one more (or replaces — see override policy below).
+- ❌ Largest surface area — two parsers to keep in sync.
+- ❌ CLI override semantics same question as Shape B but now bidirectional.
+
+**Rough scope:** M
+
+### Shape C.1 — Same as C, but `--lora PATH:TRIGGER[:SCALE]` compound syntax
+
+Variant on C: instead of repeat-flags with positional pairing, use a colon-separated compound string:
+
+```
+imagecli generate prompt.md \
+  --lora /p/lyra.sft:lyraface \
+  --lora /p/mick.sft:mickface:1.2
+```
+
+Pivotal `embedding_path` has no ergonomic place in this syntax — fall back to frontmatter for that corner.
+
+**Trade-offs:**
+- ✅ Pairing is explicit (no index-sync bug possible).
+- ✅ One flag per LoRA is very readable.
+- ❌ Colon is a valid path char on Linux though rare in practice — needs doc warning or alternate separator.
+- ❌ No room for `embedding_path` / future fields without ballooning the syntax.
+- ❌ Less Typer-idiomatic — needs a custom parser callback.
+
+**Rough scope:** M
+
+## Internal Data Model (shape-agnostic)
+
+All shapes converge on the same internal representation:
+
+```python
+@dataclass(frozen=True)
+class LoraSpec:
+    path: str
+    scale: float = 1.0
+    trigger: str | None = None
+    embedding_path: str | None = None
+```
+
+`ImageEngine.__init__` gains `loras: list[LoraSpec]` (default `[]`). The singular kwargs (`lora_path`, `lora_scale`, `trigger`, `embedding_path`) stay as a deprecated compat path — if any are set, they are folded into a one-element list at init time, and the `loras` kwarg must be empty (raise on mixed use to keep intent unambiguous).
+
+## Pivotal Apply Loop (same in all shapes)
+
+`_apply_pivotal_embeddings()` becomes:
+
+```python
+def _apply_pivotal_embeddings(self) -> None:
+    if not self.loras:
+        return
+    from imagecli.pivotal import ...
+    pivotals = []
+    for spec in self.loras:
+        p = load_pivotal_embedding(
+            spec.path, spec.trigger,
+            embedding_path=spec.embedding_path,
+            te_hidden_size=self._pipe.text_encoder.config.hidden_size,
+        )
+        if p is not None:
+            pivotals.append(p)
+    if not pivotals:
+        return
+    apply_pivotals_to_pipe(self._pipe, pivotals)   # new atomic-batch entry point
+    _patch_encode_prompt(self._pipe)               # idempotent
+```
+
+**Why a new `apply_pivotals_to_pipe` (plural) rather than calling singular in a loop:** the tokenizer collision pre-check must validate all new triggers atomically — against existing vocab AND against each other. If we loop, trigger #2's collision check runs after trigger #1 is already added, which means the tokenizer is in a mutated state during the pre-check. Fail-on-#2 would leave #1's tokens and vectors dangling — a partial load with no clean rollback. Better to validate all triggers up-front, mutate tokenizer once, then iterate apply for each pivotal.
+
+**Idempotent `_patch_encode_prompt`:** add a sentinel attribute on the pipe (`pipe._imagecli_pivotal_patched = True`) and early-return if set. Today's call site runs exactly once per load, but the safety net is cheap.
+
+## LoRA Fuse Loop (engine-specific)
+
+In `flux2_klein._load_pipeline`, the fuse block becomes:
+
+```python
+for spec in self.loras:
+    self._pipe.load_lora_weights(spec.path, adapter_name=f"lora_{i}")
+if any scale != 1.0:
+    self._pipe.set_adapters([...], adapter_weights=[...])
+self._pipe.fuse_lora()
+self._pipe.unload_lora_weights()
+```
+
+Each LoRA is loaded as a named adapter, then all fuse into the base in one `fuse_lora()` call — diffusers supports this natively. After fusion, unload cleans up adapter state before quantization.
+
+**Adapter naming:** use explicit `adapter_name` to avoid the `default_0` / `default_1` guessing game that the current singular path uses (`set_adapters(["default_0"], ...)`).
+
+## Fit Check
+
+| Shape | BC cost | Typer fit | FM readability | `embedding_path` ergonomics | Verdict |
+|---|---|---|---|---|---|
+| A (repeat-flag, positional) | low | native | poor (parallel lists) | weak (index-aligned) | rejected — index-sync is a footgun |
+| B (FM-only) | zero | n/a | excellent | strong | viable but incomplete |
+| C (FM + repeat-flag) | low | native | excellent | medium | **recommended** |
+| C.1 (FM + compound CLI flag) | low | custom parser | excellent | weak | rejected — no embedding syntax |
+
+**Recommended: Shape C** — frontmatter `loras:` list as the primary surface (since multi-LoRA is a power-user feature that naturally lives in reusable `.md` prompts), with repeatable CLI flags for ad-hoc overrides. Singular CLI and singular frontmatter fields stay as N=1 shortcuts with an explicit "mix is an error" guard.
+
+**Override policy decision (picked up in spec):** CLI `--lora` presence *replaces* the full frontmatter `loras:` list (not append). Rationale: match the existing override semantics for other fields (`--steps` replaces `steps:`, not adds to it), and avoid the "did I mean to stack on top or start fresh?" ambiguity.
+
+**Constraint eliminations:**
+- **Backward compat non-negotiable** → eliminates any shape that requires changing singular-flag behavior.
+- **Atomic tokenizer mutation** → forces a plural `apply_pivotals_to_pipe` entry point; eliminates "loop calling singular" implementations.
+- **Per-LoRA round-trip** → preserved naturally by iterating after the atomic tokenizer mutation.
+- **Idempotent encoder patch** → sentinel flag, cheap; same in all shapes.
+- **FP4 exclusion** → `if len(self.loras) >= 1 and engine is fp4: raise` — same as today, just extended to cover the new code path.
+
+## Risks
+
+1. **Diffusers multi-adapter fuse semantics.** `fuse_lora()` with multiple adapters loaded at weights ≠ 1.0 needs verification against the pinned diffusers version. **Mitigation:** spec includes a tier-1 test that loads two real LoRAs at different scales and asserts fused weight delta matches the expected linear combination (or delegates to diffusers' own test coverage + a smoke test).
+2. **TE resize cost with N triggers.** `te.resize_token_embeddings(len(tok))` is called once — but if called per-trigger in a loop (rejected design), each resize copies the whole embedding table. Sticking with the atomic plural path avoids this.
+3. **Prompt expansion ordering.** `_maybe_convert_prompt` is already multi-trigger-safe in principle (iterates `added_tokens_encoder`). Needs a regression test: prompt `"a photo of lyraface and mickface"` with both LoRAs loaded expands both triggers in-place without corrupting the other.
+4. **Daemon path.** `daemon.py` / NATS ingress passes engine construction args — needs auditing. If it re-instantiates the engine per request with singular fields, the multi-LoRA surface needs plumbing through or an explicit "daemon: N=1 only until #X" boundary.
+
+## Out of Scope Confirmation
+
+(Carried from frame, unchanged.)
+
+- Multi-LoRA without pivotal — separate issue.
+- Runtime LoRA hot-swap, per-LoRA scale sweep APIs.
+- FP4 LoRA support.
+- N > 3 stack depth (practical upper bound; document as a soft limit).
+- Non-Klein engines (`flux1-dev`, `flux1-schnell`, `sd35`, `pulid-*`).
+
+## Open Questions (for `/spec`)
+
+1. **CLI override policy** — confirmed above as "replace full list"; spec records the decision + adds acceptance test.
+2. **Adapter naming scheme** — `lora_{i}` or user-provided labels? `lora_{i}` is simpler; no user need expressed yet.
+3. **Daemon/NATS handling** — spec should decide: (a) thread `loras` through; (b) keep daemon at N=1 with explicit error if stack requested; (c) defer to follow-up.
+4. **Deprecation timeline for singular fields** — keep indefinitely as shim (low maintenance cost) or deprecate in a future release? Default: indefinite, since the shim is mechanical.
