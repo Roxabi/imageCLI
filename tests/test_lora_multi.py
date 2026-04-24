@@ -300,7 +300,7 @@ def test_fp4_guard_does_not_fire_when_no_loras():
     The guard fires only when self.loras is non-empty.  With empty loras the
     method proceeds into the real load path, which we stub out entirely.
     """
-    import imagecli.engines.flux2_klein_fp4 as fp4_mod
+    import imagecli.engines.nvfp4_quantize as nvfp4_mod
     from imagecli.engines.flux2_klein_fp4 import Flux2KleinFP4Engine
 
     engine = Flux2KleinFP4Engine(loras=[])
@@ -322,7 +322,7 @@ def test_fp4_guard_does_not_fire_when_no_loras():
     with (
         patch.dict(sys.modules, stub_modules),
         patch.object(engine, "_check_requirements"),
-        patch.object(fp4_mod, "_patch_transformer_nvfp4", return_value=10),
+        patch.object(nvfp4_mod, "patch_transformer_nvfp4", return_value=10),
         patch.object(engine, "_apply_pivotal_embeddings"),
     ):
         # No ValueError should be raised
