@@ -11,6 +11,8 @@ imports.
 
 from __future__ import annotations
 
+__all__ = ["NVFP4_SUFFIXES", "convert_nvfp4_state_dict"]
+
 _RENAME = {
     "img_in": "x_embedder",
     "txt_in": "context_embedder",
@@ -45,13 +47,17 @@ _SINGLE_BLOCK_MAP = {
 }
 
 # NVFP4 tensor suffixes: each linear layer has these 4 tensors
-NVFP4_SUFFIXES = (".weight", ".weight_scale", ".weight_scale_2", ".input_scale")
+NVFP4_SUFFIXES: tuple[str, ...] = (".weight", ".weight_scale", ".weight_scale_2", ".input_scale")
 
 
 def convert_nvfp4_state_dict(raw: dict[str, object]) -> dict[str, object]:
-    """Convert BFL NVFP4 state dict keys to diffusers naming, splitting fused QKV."""
+    """Convert BFL NVFP4 state dict keys to diffusers naming, splitting fused QKV.
+
+    Operates on a shallow copy of ``raw`` so the caller's dict is not consumed.
+    """
     import torch
 
+    raw = dict(raw)
     out: dict[str, object] = {}
 
     # Step 1: Simple renames

@@ -1,6 +1,6 @@
 """FLUX.2-klein-4B + PuLID face identity lock, NVFP4-quantized — Blackwell only.
 
-Combines the NVFP4 runtime quantization path from flux2_klein_fp4 with the
+Combines the NVFP4 runtime quantization path from nvfp4_quantize with the
 PuLID CA activation injection from pulid_flux2_klein.
 
 Load path:
