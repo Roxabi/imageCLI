@@ -59,9 +59,13 @@ class Flux2KleinFP4Engine(ImageEngine):
         if self._pipe is not None:
             return
 
-        if self.loras:
+        # LoRA AND standalone-pivotal are both out of scope for NVFP4 (pre-
+        # quantized weights; TE-side embeddings without a LoRA would attach
+        # but serve no purpose on a frozen transformer).
+        if self.loras or any(spec.embedding_path for spec in self.loras):
             raise ValueError(
-                "flux2-klein-fp4 does not support LoRA (model is pre-quantized NVFP4). "
+                "flux2-klein-fp4 does not support LoRA or standalone pivotal "
+                "embeddings (model is pre-quantized NVFP4). "
                 "Use flux2-klein or flux2-klein-fp8 instead."
             )
 

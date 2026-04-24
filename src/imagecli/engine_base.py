@@ -68,6 +68,11 @@ class ImageEngine(TwoPhaseMixin, ABC):
                     embedding_path=embedding_path,
                 )
             ]
+        elif embedding_path is not None or trigger is not None:
+            raise ValueError(
+                "embedding_path / trigger require lora_path (pivotal embeddings "
+                "are scoped to a LoRA). Pass lora_path=... or use loras=[LoraSpec(...)]."
+            )
         else:
             self.loras = []
 

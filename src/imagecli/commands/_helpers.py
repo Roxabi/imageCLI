@@ -6,6 +6,7 @@ and lets batch strategies reuse ``run_generate`` without pulling ``cli.py``.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from rich.progress import (
 from imagecli.lora_spec import LoraSpec
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def resolve_loras(
@@ -40,6 +42,9 @@ def resolve_loras(
     """
     if not cli_loras:
         return list(fm_loras)
+
+    if fm_loras:
+        logger.info("CLI --lora overrides frontmatter loras: list (N=%d)", len(fm_loras))
 
     n = len(cli_loras)
 

@@ -285,12 +285,14 @@ def test_fp4_raises_value_error_multiple_loras():
 
 
 def test_fp4_error_message_suggests_alternatives():
-    """Error message must name valid alternative engines."""
+    """Error message must name valid alternative engines — specifically fp8,
+    not just the fp4 engine name prefix. A regression that drops the
+    alternative clause while keeping the leading engine name should fail."""
     from imagecli.engines.flux2_klein_fp4 import Flux2KleinFP4Engine
 
     engine = Flux2KleinFP4Engine(loras=[LoraSpec(path="/lora/a.safetensors")])
 
-    with pytest.raises(ValueError, match="flux2-klein"):
+    with pytest.raises(ValueError, match="flux2-klein-fp8"):
         engine._load_pipeline()
 
 

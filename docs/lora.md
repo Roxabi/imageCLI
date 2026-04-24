@@ -168,6 +168,10 @@ When multiple LoRAs carry pivotal embeddings, all trigger tokens and trained vec
 | `flux2-klein-fp8` | Yes | torchao FP8; same fuse order |
 | `flux2-klein-fp4` | **No** | NVFP4 is pre-quantized; LoRA fuse into a frozen quantized checkpoint is unsupported. Raises `ValueError` if `loras` is non-empty. |
 
+### Practical stacking depth
+
+No hard cap is enforced on `N`, but stacking more than 2–3 adapters is untested and not recommended. Each additional adapter adds roughly 0.5–1 GB VRAM at fuse time, and identity fidelity tends to degrade as trained directions in weight space conflict and cancel. Start with N=2 and measure before going higher.
+
 ### Mixed-form error
 
 Setting both `loras:` and any singular key (`lora_path`, `lora_scale`, `trigger`, `embedding_path`) in the same source raises `ValueError`. This applies to frontmatter, engine constructor kwargs, and NATS payload. Use one form or the other — `loras:` list for multi-LoRA, singular keys for legacy single-LoRA.

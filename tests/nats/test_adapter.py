@@ -304,8 +304,11 @@ class TestImageNatsAdapter:
 
         reply = msg.last_reply()
         assert reply["ok"] is False
-        # Surface as a validation error (not a 500-style generation_failed crash)
-        assert reply["error"] in ("invalid_request", "missing_required_field", "generation_failed")
+        # Must surface as a validation error — not as generation_failed,
+        # which would indicate the mixed-form payload slipped past
+        # _validate_request and into the generation loop.
+        assert reply["error"] in ("invalid_request", "missing_required_field")
+        assert reply["error"] != "generation_failed"
         assert (
             "loras" in reply.get("error_detail", "").lower()
             or "mixed" in reply.get("error_detail", "").lower()
