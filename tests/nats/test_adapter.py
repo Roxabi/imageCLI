@@ -96,6 +96,7 @@ def _make_adapter(**kwargs) -> "ImageNatsAdapter":
     }
     defaults.update(kwargs)
     adapter = ImageNatsAdapter(**defaults)
+
     # Mock the reply method to capture replies on the msg object
     # This is needed because NatsAdapterBase.reply() uses a NATS connection
     async def _mock_reply(msg, data: bytes) -> None:
@@ -184,6 +185,133 @@ class TestImageNatsAdapter:
     # ------------------------------------------------------------------
     # Case 4: valid request returns success with image_b64
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Case 5: loras list payload threads through to engine constructor
+    # ------------------------------------------------------------------
+    def test_nats_accepts_loras_list_payload(self) -> None:
+        """Payload with loras list → engine constructed with matching list[LoraSpec]."""
+        _require_imports()
+        from imagecli.lora_spec import LoraSpec
+
+        # Arrange
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(prompt="a cat", engine="flux2-klein")
+        payload["loras"] = [
+            {"path": "/ComfyUI/models/loras/style.safetensors", "trigger": "sty"},
+            {"path": "/ComfyUI/models/loras/face.safetensors", "trigger": "fce"},
+        ]
+
+        captured_kwargs: dict = {}
+
+        def _fake_get_engine(name, **kwargs):
+            captured_kwargs.update(kwargs)
+            mock_engine = MagicMock()
+            mock_engine.cleanup = MagicMock()
+            mock_engine.clear_cache = MagicMock()
+            return mock_engine
+
+        # Bypass path allowlist validation — this is a wiring test, not a security test
+        with (
+            patch.object(adapter, "_validate_path", return_value=(True, None)),
+            patch("imagecli.engine.get_engine", side_effect=_fake_get_engine),
+            patch(
+                "imagecli.engine.list_engines",
+                return_value=[{"name": "flux2-klein"}],
+            ),
+            patch("imagecli.engine.preflight_check"),
+        ):
+            asyncio.run(adapter.handle(msg, payload))
+
+        # Wiring assertion: loras= kwarg must be a 2-element list of LoraSpec
+        assert "loras" in captured_kwargs, "get_engine was not called with loras= kwarg"
+        loras = captured_kwargs["loras"]
+        assert len(loras) == 2
+        assert isinstance(loras[0], LoraSpec)
+        assert loras[0].path == "/ComfyUI/models/loras/style.safetensors"
+        assert loras[0].trigger == "sty"
+        assert isinstance(loras[1], LoraSpec)
+        assert loras[1].path == "/ComfyUI/models/loras/face.safetensors"
+        assert loras[1].trigger == "fce"
+
+    # ------------------------------------------------------------------
+    # Case 6: legacy singular keys fold into 1-element loras list
+    # ------------------------------------------------------------------
+    def test_nats_legacy_singular_payload_still_works(self) -> None:
+        """Legacy singular lora_path/lora_scale/trigger/embedding_path → 1-element loras list."""
+        _require_imports()
+        from imagecli.lora_spec import LoraSpec
+
+        # Arrange
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(prompt="a cat", engine="flux2-klein")
+        payload["lora_path"] = "/ComfyUI/models/loras/myface.safetensors"
+        payload["lora_scale"] = 1.2
+        payload["trigger"] = "lyraface"
+        payload["embedding_path"] = "/ComfyUI/models/embeddings/myface.safetensors"
+
+        captured_kwargs: dict = {}
+
+        def _fake_get_engine(name, **kwargs):
+            captured_kwargs.update(kwargs)
+            mock_engine = MagicMock()
+            mock_engine.cleanup = MagicMock()
+            mock_engine.clear_cache = MagicMock()
+            return mock_engine
+
+        # Bypass path allowlist validation — this is a wiring test, not a security test
+        with (
+            patch.object(adapter, "_validate_path", return_value=(True, None)),
+            patch("imagecli.engine.get_engine", side_effect=_fake_get_engine),
+            patch(
+                "imagecli.engine.list_engines",
+                return_value=[{"name": "flux2-klein"}],
+            ),
+            patch("imagecli.engine.preflight_check"),
+        ):
+            asyncio.run(adapter.handle(msg, payload))
+
+        # Regression guard: singular keys must fold into a 1-element loras list
+        assert "loras" in captured_kwargs, "get_engine was not called with loras= kwarg"
+        loras = captured_kwargs["loras"]
+        assert len(loras) == 1
+        assert isinstance(loras[0], LoraSpec)
+        assert loras[0].path == "/ComfyUI/models/loras/myface.safetensors"
+        assert loras[0].scale == 1.2
+        assert loras[0].trigger == "lyraface"
+        assert loras[0].embedding_path == "/ComfyUI/models/embeddings/myface.safetensors"
+
+    # ------------------------------------------------------------------
+    # Case 7: mixed form (loras list + singular key) → error response
+    # ------------------------------------------------------------------
+    def test_nats_rejects_mixed_form_payload(self) -> None:
+        """Payload with both loras list and a singular key → error response (no crash)."""
+        _require_imports()
+
+        # Arrange
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(prompt="a cat", engine="flux2-klein")
+        payload["loras"] = [{"path": "/ComfyUI/models/loras/style.safetensors"}]
+        payload["lora_path"] = "/ComfyUI/models/loras/face.safetensors"  # mixed — forbidden
+
+        with patch(
+            "imagecli.engine.list_engines",
+            return_value=[{"name": "flux2-klein"}],
+        ):
+            asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is False
+        # Surface as a validation error (not a 500-style generation_failed crash)
+        assert reply["error"] in ("invalid_request", "missing_required_field", "generation_failed")
+        assert (
+            "loras" in reply.get("error_detail", "").lower()
+            or "mixed" in reply.get("error_detail", "").lower()
+            or "singular" in reply.get("error_detail", "").lower()
+        )
+
     @pytest.mark.xfail(reason="Adapter needs generation logic in handle() - ADR-046")
     def test_adapter_handles_valid_request(self, tmp_path: Path) -> None:
         """Valid request returns success with image_b64."""

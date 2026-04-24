@@ -116,17 +116,44 @@ class ImageNatsAdapter(NatsAdapterBase):
         if steps is not None and steps > MAX_STEPS:
             return False, f"steps exceeds max ({steps} > {MAX_STEPS})"
 
-        # Path validation for LoRA and embeddings
-        lora_path = payload.get("lora_path")
-        embedding_path = payload.get("embedding_path")
+        # Mixed-form guard: reject payloads that combine loras list with singular keys
+        _SINGULAR_LORA_KEYS = {"lora_path", "lora_scale", "trigger", "embedding_path"}
+        has_loras_list = "loras" in payload
+        singular_present = _SINGULAR_LORA_KEYS & payload.keys()
+        if has_loras_list and singular_present:
+            return (
+                False,
+                "Pass either loras= or the singular fields "
+                "(lora_path / lora_scale / trigger / embedding_path), not both.",
+            )
 
-        valid, err = self._validate_path(lora_path, ALLOWED_LORA_DIRS)
-        if not valid:
-            return False, f"lora_path: {err}"
+        # Path validation for singular lora_path / embedding_path
+        if not has_loras_list:
+            lora_path = payload.get("lora_path")
+            embedding_path = payload.get("embedding_path")
 
-        valid, err = self._validate_path(embedding_path, ALLOWED_EMBEDDING_DIRS)
-        if not valid:
-            return False, f"embedding_path: {err}"
+            valid, err = self._validate_path(lora_path, ALLOWED_LORA_DIRS)
+            if not valid:
+                return False, f"lora_path: {err}"
+
+            valid, err = self._validate_path(embedding_path, ALLOWED_EMBEDDING_DIRS)
+            if not valid:
+                return False, f"embedding_path: {err}"
+        else:
+            # Validate each lora entry's path and embedding_path
+            for i, item in enumerate(payload.get("loras") or []):
+                if not isinstance(item, dict):
+                    return False, f"loras[{i}] must be a mapping, got {type(item).__name__}"
+                if "path" not in item:
+                    return False, f"loras[{i}] missing required key 'path'"
+                valid, err = self._validate_path(item.get("path"), ALLOWED_LORA_DIRS)
+                if not valid:
+                    return False, f"loras[{i}].path: {err}"
+                emb = item.get("embedding_path")
+                if emb:
+                    valid, err = self._validate_path(emb, ALLOWED_EMBEDDING_DIRS)
+                    if not valid:
+                        return False, f"loras[{i}].embedding_path: {err}"
 
         return True, None
 
@@ -181,21 +208,48 @@ class ImageNatsAdapter(NatsAdapterBase):
             # ModelRegistry (warm across requests, LRU-evicted on VRAM
             # pressure). Per-request LoRA/pivotal configs take a fresh
             # engine (registry keys by name only) and cleanup() after use.
-            lora_path = payload.get("lora_path")
-            lora_scale = payload.get("lora_scale", 1.0)
-            trigger = payload.get("trigger")
-            embedding_path = payload.get("embedding_path")
-            uses_per_request_cfg = bool(lora_path or trigger or embedding_path)
+
+            # Resolve loras: list form takes precedence; singular keys fold into
+            # a 1-element list for backward compatibility (mixed form is already
+            # rejected by _validate_request above).
+            from imagecli.lora_spec import LoraSpec
+
+            raw_loras = payload.get("loras")
+            if raw_loras is not None:
+                loras: list[LoraSpec] = [
+                    LoraSpec(
+                        path=str(item["path"]),
+                        scale=float(item.get("scale", 1.0)),
+                        trigger=item.get("trigger") or None,
+                        embedding_path=item.get("embedding_path") or None,
+                    )
+                    for item in raw_loras
+                ]
+            else:
+                lora_path = payload.get("lora_path")
+                lora_scale = float(payload.get("lora_scale", 1.0))
+                trigger = payload.get("trigger")
+                embedding_path = payload.get("embedding_path")
+                if lora_path:
+                    loras = [
+                        LoraSpec(
+                            path=lora_path,
+                            scale=lora_scale,
+                            trigger=trigger,
+                            embedding_path=embedding_path,
+                        )
+                    ]
+                else:
+                    loras = []
+
+            uses_per_request_cfg = bool(loras)
 
             try:
                 if uses_per_request_cfg:
                     engine = get_engine(
                         engine_name,
                         compile=True,
-                        lora_path=lora_path,
-                        lora_scale=lora_scale,
-                        trigger=trigger,
-                        embedding_path=embedding_path,
+                        loras=loras,
                     )
                 else:
                     from imagecli.model_registry import model_registry
