@@ -216,6 +216,30 @@ def test_get_engine_accepts_loras_only():
     assert engine.loras == specs
 
 
+def test_get_engine_legacy_kwargs_emits_deprecation_warning():
+    # Act / Assert: legacy singular kwargs fire DeprecationWarning
+    with pytest.warns(DeprecationWarning, match="singular LoRA kwargs"):
+        get_engine("flux2-klein", lora_path="/nonexistent.safetensors")
+
+
+def test_get_engine_loras_does_not_warn():
+    # Act: new plural form must not fire any warning
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        get_engine("flux2-klein", loras=[LoraSpec("/a")])
+
+
+def test_get_engine_no_lora_does_not_warn():
+    # Act: plain call (no LoRA at all) must not fire the deprecation warning
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        get_engine("flux2-klein")
+
+
 def test_list_engines():
     # Act
     engines = list_engines()
