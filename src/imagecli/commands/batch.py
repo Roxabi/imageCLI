@@ -43,7 +43,9 @@ def batch(
     ] = None,
     lora_scale: Annotated[
         Optional[List[float]],
-        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."),
+        typer.Option(
+            "--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."
+        ),
     ] = None,
     trigger: Annotated[
         Optional[List[str]],

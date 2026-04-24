@@ -69,6 +69,7 @@ def adapter():
     from imagecli.nats.adapter import ImageNatsAdapter
 
     adapter = ImageNatsAdapter(default_engine="flux2-klein")
+
     # Mock reply method to capture replies without NATS connection
     # This mirrors the pattern from test_adapter.py
     async def _mock_reply(msg, data: bytes) -> None:
@@ -259,7 +260,9 @@ async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
 
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
-        patch("imagecli.engine.preflight_check", side_effect=InsufficientResourcesError("low VRAM")),
+        patch(
+            "imagecli.engine.preflight_check", side_effect=InsufficientResourcesError("low VRAM")
+        ),
     ):
         # Act
         await adapter.handle(msg, request_payload)

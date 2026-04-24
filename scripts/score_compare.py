@@ -23,8 +23,10 @@ from PIL import Image
 
 # ─── Buffalo (InsightFace) ────────────────────────────────────────────────────
 
+
 def load_buffalo(model_root="~/ComfyUI/models/insightface"):
     from insightface.app import FaceAnalysis
+
     app = FaceAnalysis(
         name="antelopev2",
         root=str(Path(model_root).expanduser()),
@@ -67,8 +69,10 @@ def buffalo_score(emb: np.ndarray | None, ref_emb: np.ndarray) -> float | None:
 
 # ─── CLIP ─────────────────────────────────────────────────────────────────────
 
+
 def load_clip(model_name="ViT-L-14", pretrained="openai"):
     import open_clip
+
     model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
     tokenizer = open_clip.get_tokenizer(model_name)
     model.eval()
@@ -89,6 +93,7 @@ def clip_score(model, preprocess, tokenizer, img_path: Path, prompt: str) -> flo
 
 # ─── Prompt parsers ───────────────────────────────────────────────────────────
 
+
 def parse_md_prompt(md_path: Path) -> str:
     text = md_path.read_text()
     # strip YAML frontmatter
@@ -106,6 +111,7 @@ def parse_txt_prompt(txt_path: Path) -> str:
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+
 
 def score_set(
     label: str,
@@ -179,8 +185,11 @@ def main():
         default=["P1641", "P1850", "P1637", "P0423", "P0474"],
         help="Stem prefixes of reference images in lora top30/",
     )
-    parser.add_argument("--refs-dir", type=Path,
-        default=Path("~/.roxabi/forge/lyra/brand/concepts/avatar-lyra-v22-lora/top30").expanduser())
+    parser.add_argument(
+        "--refs-dir",
+        type=Path,
+        default=Path("~/.roxabi/forge/lyra/brand/concepts/avatar-lyra-v22-lora/top30").expanduser(),
+    )
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
@@ -205,12 +214,24 @@ def main():
     clip_model, preprocess, tokenizer = load_clip()
 
     pulid_results = score_set(
-        "PuLID", args.pulid.expanduser(), args.pulid_prompts.expanduser(),
-        app, ref_emb, clip_model, preprocess, tokenizer,
+        "PuLID",
+        args.pulid.expanduser(),
+        args.pulid_prompts.expanduser(),
+        app,
+        ref_emb,
+        clip_model,
+        preprocess,
+        tokenizer,
     )
     lora_results = score_set(
-        "LoRA", args.lora.expanduser(), None,
-        app, ref_emb, clip_model, preprocess, tokenizer,
+        "LoRA",
+        args.lora.expanduser(),
+        None,
+        app,
+        ref_emb,
+        clip_model,
+        preprocess,
+        tokenizer,
     )
 
     out = {

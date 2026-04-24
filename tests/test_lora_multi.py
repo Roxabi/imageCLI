@@ -399,7 +399,10 @@ def test_e2e_multi_lora_wiring(tmp_path):
 
     with (
         patch.dict(sys.modules, _klein_sys_modules(pipe)),
-        patch("imagecli.pivotal.load_pivotal_embedding", side_effect=lambda *a, **kw: next(fake_embs_iter)),
+        patch(
+            "imagecli.pivotal.load_pivotal_embedding",
+            side_effect=lambda *a, **kw: next(fake_embs_iter),
+        ),
         patch("imagecli.pivotal.apply_pivotals_to_pipe", side_effect=_fake_apply_pivotals),
         patch("imagecli.pivotal._patch_encode_prompt"),
     ):

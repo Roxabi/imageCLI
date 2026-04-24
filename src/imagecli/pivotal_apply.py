@@ -20,9 +20,7 @@ def _placeholder_tokens_for(pivotal: PivotalEmbedding) -> list[str]:
     return [pivotal.trigger] + [f"{pivotal.trigger}_{i}" for i in range(1, n)]
 
 
-def apply_pivotals_to_pipe(
-    pipe, pivotals: list[PivotalEmbedding]
-) -> list[list[int]]:
+def apply_pivotals_to_pipe(pipe, pivotals: list[PivotalEmbedding]) -> list[list[int]]:
     """Wire one or more pivotal embeddings into a Flux2Klein pipeline atomically.
 
     Adds placeholder tokens for every pivotal in a single ``add_tokens`` call,

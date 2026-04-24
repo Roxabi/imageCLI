@@ -191,7 +191,10 @@ def _load_pipe():
 
     used = torch.cuda.memory_allocated() / 1e9
     total = torch.cuda.get_device_properties(0).total_memory / 1e9
-    print(f"[imagecli daemon] Transformer (FP8) + VAE on GPU  VRAM: {used:.1f}/{total:.1f} GB", flush=True)
+    print(
+        f"[imagecli daemon] Transformer (FP8) + VAE on GPU  VRAM: {used:.1f}/{total:.1f} GB",
+        flush=True,
+    )
 
     return pipe
 
@@ -297,7 +300,9 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
             embed_path_str = job.get("embed_path")
 
             if not job_id or not prompt or not embed_path_str:
-                _send_json(conn, {"ok": False, "error": f"job {i}: missing id, prompt, or embed_path"})
+                _send_json(
+                    conn, {"ok": False, "error": f"job {i}: missing id, prompt, or embed_path"}
+                )
                 return
 
             embed_path = Path(embed_path_str)
@@ -313,7 +318,11 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
 
             with torch.no_grad():
                 prompt_embeds, text_ids = encoder_pipe.encode_prompt(prompt=prompt)
-                neg_embeds, neg_text_ids = encoder_pipe.encode_prompt(prompt=negative_prompt) if negative_prompt else (None, None)
+                neg_embeds, neg_text_ids = (
+                    encoder_pipe.encode_prompt(prompt=negative_prompt)
+                    if negative_prompt
+                    else (None, None)
+                )
 
             payload = {
                 "prompt_embeds": prompt_embeds.cpu(),
@@ -321,7 +330,9 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
             }
             if neg_embeds is not None:
                 payload["negative_prompt_embeds"] = neg_embeds.cpu()
-                payload["negative_text_ids"] = neg_text_ids.cpu() if neg_text_ids is not None else None
+                payload["negative_text_ids"] = (
+                    neg_text_ids.cpu() if neg_text_ids is not None else None
+                )
             torch.save(payload, embed_path)
 
             elapsed = time.time() - t0
@@ -383,7 +394,11 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
 
             data = torch.load(embed_path, weights_only=True)
             prompt_embeds = data["prompt_embeds"].to("cuda")
-            neg_embeds = data["negative_prompt_embeds"].to("cuda") if "negative_prompt_embeds" in data else None
+            neg_embeds = (
+                data["negative_prompt_embeds"].to("cuda")
+                if "negative_prompt_embeds" in data
+                else None
+            )
 
             with torch.no_grad():
                 result = pipe(

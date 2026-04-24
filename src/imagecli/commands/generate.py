@@ -47,7 +47,9 @@ def generate(
     ] = None,
     lora_scale: Annotated[
         Optional[List[float]],
-        typer.Option("--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."),
+        typer.Option(
+            "--lora-scale", help="LoRA adapter scale (default 1.0). Pairwise with --lora."
+        ),
     ] = None,
     trigger: Annotated[
         Optional[List[str]],
@@ -107,7 +109,9 @@ def generate(
         face_imgs = resolve_face_images(doc.face_images, path.parent)
         pulid_str = pulid_strength if pulid_strength is not None else doc.pulid_strength
         fm_loras = getattr(doc, "loras", [])
-        resolved_loras = resolve_loras(cli_loras, cli_scales, cli_triggers, cli_embeddings, fm_loras)
+        resolved_loras = resolve_loras(
+            cli_loras, cli_scales, cli_triggers, cli_embeddings, fm_loras
+        )
     else:
         prompt_text = prompt_or_file
         stem = "image"

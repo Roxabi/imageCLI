@@ -64,9 +64,7 @@ def _validate(tensor: torch.Tensor, te_hidden_size: int) -> None:
         )
     n, hidden = shape[0], shape[1]
     if n < 1:
-        raise ValueError(
-            f"Invalid emb_params shape {shape}: expected N >= 1, got N={n}."
-        )
+        raise ValueError(f"Invalid emb_params shape {shape}: expected N >= 1, got N={n}.")
     if n > _MAX_NUM_TOKENS:
         raise ValueError(
             f"Invalid emb_params shape {shape}: expected N <= {_MAX_NUM_TOKENS} "
