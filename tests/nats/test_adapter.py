@@ -158,7 +158,6 @@ class TestImageNatsAdapter:
     # ------------------------------------------------------------------
     # Case 3: unknown engine
     # ------------------------------------------------------------------
-    @pytest.mark.xfail(reason="Adapter needs engine validation in handle() - ADR-046")
     def test_adapter_rejects_unknown_engine(self) -> None:
         """Unknown engine name returns error."""
         _require_imports()

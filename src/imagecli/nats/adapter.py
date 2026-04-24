@@ -63,7 +63,9 @@ class ImageNatsAdapter(NatsAdapterBase):
         self._engine_loaded: str | None = None
         self._engine_instance: Any = None  # Cached engine for reuse
 
-    def _validate_path(self, path_str: str | None, allowed_dirs: list[Path]) -> tuple[bool, str | None]:
+    def _validate_path(
+        self, path_str: str | None, allowed_dirs: list[Path]
+    ) -> tuple[bool, str | None]:
         """Validate that a path is within an allowlisted directory.
 
         Returns (valid, error_message). Path must be absolute and resolve to a subdir
@@ -174,23 +176,32 @@ class ImageNatsAdapter(NatsAdapterBase):
                 await self._reply_error(msg, request_id, "unknown_engine", engine_name)
                 return
 
-            # Get or create engine instance
-            # Reuse cached engine if same as previous request
+            # Get or create engine instance.
+            # No-LoRA / no-pivotal requests share a cached instance via
+            # ModelRegistry (warm across requests, LRU-evicted on VRAM
+            # pressure). Per-request LoRA/pivotal configs take a fresh
+            # engine (registry keys by name only) and cleanup() after use.
             lora_path = payload.get("lora_path")
             lora_scale = payload.get("lora_scale", 1.0)
             trigger = payload.get("trigger")
             embedding_path = payload.get("embedding_path")
+            uses_per_request_cfg = bool(lora_path or trigger or embedding_path)
 
             try:
-                # Create fresh engine for each request (ensures correct LoRA/params)
-                engine = get_engine(
-                    engine_name,
-                    compile=True,
-                    lora_path=lora_path,
-                    lora_scale=lora_scale,
-                    trigger=trigger,
-                    embedding_path=embedding_path,
-                )
+                if uses_per_request_cfg:
+                    engine = get_engine(
+                        engine_name,
+                        compile=True,
+                        lora_path=lora_path,
+                        lora_scale=lora_scale,
+                        trigger=trigger,
+                        embedding_path=embedding_path,
+                    )
+                else:
+                    from imagecli.model_registry import model_registry
+
+                    engine = model_registry.get(engine_name)
+                self._engine_loaded = engine_name
             except Exception as e:
                 error_code, error_detail = self._map_exception_to_error(e)
                 await self._reply_error(msg, request_id, error_code, error_detail)
@@ -240,7 +251,13 @@ class ImageNatsAdapter(NatsAdapterBase):
             except Exception as e:
                 error_code, error_detail = self._map_exception_to_error(e)
                 log.exception(f"Generation failed: {e}")
-                engine.cleanup()
+                if uses_per_request_cfg:
+                    engine.cleanup()
+                else:
+                    from imagecli.model_registry import model_registry
+
+                    # Evict so the registry can reload cleanly next request.
+                    model_registry.evict(engine_name)
                 await self._reply_error(msg, request_id, error_code, error_detail)
                 return
 
@@ -306,9 +323,15 @@ class ImageNatsAdapter(NatsAdapterBase):
 
             except Exception as e:
                 log.exception(f"Failed to encode response: {e}")
-                await self._reply_error(msg, request_id, "generation_failed", "Failed to encode response")
+                await self._reply_error(
+                    msg, request_id, "generation_failed", "Failed to encode response"
+                )
             finally:
-                engine.cleanup()
+                if uses_per_request_cfg:
+                    engine.cleanup()
+                else:
+                    # Registry-cached engine stays warm between requests.
+                    engine.clear_cache()
                 # Clean up temp file if it still exists
                 try:
                     if saved_path.exists():
@@ -331,10 +354,28 @@ class ImageNatsAdapter(NatsAdapterBase):
         await self.reply(msg, json.dumps(reply).encode())
 
     def heartbeat_payload(self) -> dict:
-        """Extend base heartbeat with engine_loaded and active_requests."""
+        """Extend base heartbeat per lyra.image contract (see roxabi_contracts.image.models.Heartbeat)."""
         base = super().heartbeat_payload()
-        base["engine_loaded"] = self._engine_loaded
+        from imagecli.model_registry import model_registry
+
+        loaded = model_registry.loaded_engines()
+        # Contract exposes a single engine_loaded string; pick the MRU entry
+        # when the registry caches several, else fall back to per-request tracking.
+        base["engine_loaded"] = loaded[-1] if loaded else self._engine_loaded
         base["active_requests"] = self._active_request_count()
+
+        free_mb = model_registry.vram_free_mb()
+        total_mb = 0
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                total_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+        except Exception:
+            pass
+        if total_mb:
+            base["vram_used_mb"] = int(total_mb - free_mb)
+            base["vram_total_mb"] = int(total_mb)
         return base
 
     def _active_request_count(self) -> int:
