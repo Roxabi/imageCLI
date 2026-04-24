@@ -1,0 +1,75 @@
+---
+title: Split src/imagecli/engines/pulid_flux2_klein.py (502 LOC)
+issue: 56
+status: approved
+tier: F-lite
+date: 2026-04-24
+---
+
+## Problem
+
+`src/imagecli/engines/pulid_flux2_klein.py` is 502 LOC — over the 300 LOC
+quality_gates threshold installed in #53. The file mixes three concerns:
+
+1. Inlined PuLID `nn.Module` classes — `_PerceiverAttentionCA`, `_IDFormer`
+   (plus any helpers). Same shape as the Klein v2 port from
+   iFayens/ComfyUI-PuLID-Flux2.
+2. Transformer monkey-patching helpers — patch routines that rewrite
+   FLUX.2-klein double-block forwards to inject PuLID CA, plus the
+   dim-projection wiring (`proj_up` 3072→4096, trained CA at 4096,
+   `proj_down` 4096→3072) described in the module docstring.
+3. The engine class `PuLIDFlux2KleinEngine` — orchestration, model loading,
+   generation, cleanup.
+
+The file is currently exempted in `tools/file_exemptions.txt`; the
+exemption should go away once the split lands. Extract (1) and (2) into
+sibling modules under `src/imagecli/engines/_pulid/` so the engine class
+becomes a thin consumer — same pattern as #55 for `pulid_flux1_dev.py`.
+
+## Who
+
+- **Primary:** imageCLI maintainer (Mickael) — needs the quality-gate
+  threshold to stay meaningful; every exemption erodes the signal.
+- **Secondary:** future contributors debugging PuLID Klein v2 face-lock
+  behavior — separated `nn.Module` definitions, patching helpers, and
+  dim-projection wiring are easier to audit than a 500-line mixed module.
+
+## Constraints
+
+- Must not change PuLID Klein v2 face-lock behavior — golden-image
+  regression test with fixed seed + `face_image` required (noted in issue
+  audit).
+- VRAM usage unchanged within ±0.2 GB tolerance (~9–10 GB baseline).
+- **Load-order sensitive:** the `proj_up` / `proj_down` dim-projection
+  init order relative to trained CA weight loading must be preserved
+  exactly — risks silent random-init regressions (the class bug already
+  documented in CLAUDE.md under `pulid-flux2-klein CA loading`).
+- PuLID patching captures forward methods directly — extraction must
+  preserve forward-method capture semantics. `compile=False` always
+  (already documented in CLAUDE.md).
+- Keep Strategy B dim-projection docstring (module top) intact — it
+  explains why we keep trained CA at 4096 vs iFayens' random 3072 CA.
+- Ruff L≤100, py312, quality_gates pass (lint + typecheck + tests).
+
+## Out of Scope
+
+- No behavioral changes to PuLID Klein v2 face-lock output.
+- No refactor of `pulid_flux1_dev.py` (separate engine, handled in #55).
+- No changes to Klein v2 weight paths or InsightFace AntelopeV2 paths.
+- No new PuLID features, strengths, or config knobs.
+- No CLI UX changes.
+- No re-evaluation of Strategy B vs iFayens random-CA approach.
+
+## Complexity
+
+**Tier: F-lite** — clear structural split within a single domain,
+mechanical extraction of self-contained `nn.Module` classes + patching
+helper + dim-projection wiring, no architectural unknowns. The
+load-order sensitivity + regression-test requirement raise verification
+effort but not design effort.
+
+Signals:
+- Single domain (Python package internals, PuLID Klein v2 engine).
+- ≤5 files touched (1 split source → 3–4 new modules under `_pulid/`).
+- No new patterns or arch; purely moving code — parallels #55.
+- Label: `size:F-lite`.
