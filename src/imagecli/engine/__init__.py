@@ -1,19 +1,17 @@
-"""Backward-compatible re-export shim — real code is split across
-``engine_base`` (ABC + preflight), ``engine_helpers`` (helpers/errors),
-and ``engine_registry`` (factory)."""
+"""Backward-compatible re-export shim — real code lives in the engine subpackage:
+``base`` (ABC + preflight), ``helpers`` (helpers/errors), ``registry`` (factory)."""
 
 from __future__ import annotations
 
-from imagecli.engine_base import ImageEngine
-from imagecli.engine_helpers import (
-    preflight_check,
+from .base import ImageEngine, preflight_check
+from .helpers import (
     MIN_FREE_RAM_GB,
     EngineCapabilities,
     InsufficientResourcesError,
     get_compute_capability,
     warn_ignored_params,
 )
-from imagecli.engine_registry import (
+from .registry import (
     _get_registry,  # noqa: F401  # pyright: ignore[reportUnusedImport] — re-exported for existing callers (tests/test_engine.py)
     get_engine,
     list_engines,

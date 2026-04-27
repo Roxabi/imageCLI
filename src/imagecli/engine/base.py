@@ -1,4 +1,4 @@
-"""Abstract :class:`ImageEngine` ABC. Helpers/preflight/registry are siblings."""
+"""Abstract :class:`ImageEngine` + :func:`preflight_check`."""
 
 from __future__ import annotations
 
@@ -8,16 +8,20 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
 
-from imagecli import engine_helpers as _h
-from imagecli.engine_helpers import (
+from . import helpers as _h
+from .helpers import (
     EngineCapabilities,
     InsufficientResourcesError,
+    MIN_FREE_RAM_GB,
     TwoPhaseMixin,
-    _UNSET,
     logger,
     quantize_transformer,
 )
 from imagecli.lora_spec import LoraSpec
+
+# Sentinel — distinguishes "lora_scale not passed" from "lora_scale=1.0 passed
+# explicitly". Needed to detect mixed-form use alongside ``loras=``.
+_UNSET: object = object()
 
 
 class ImageEngine(TwoPhaseMixin, ABC):
@@ -40,9 +44,52 @@ class ImageEngine(TwoPhaseMixin, ABC):
         self._pipe: object | None = None
         self._compile = compile
         self._compiled = False
-        self.loras, (self.lora_path, self.lora_scale, self.trigger, self.embedding_path) = (
-            _h._resolve_loras(loras, lora_path, lora_scale, trigger, embedding_path)
+
+        singular_set = (
+            lora_path is not None
+            or trigger is not None
+            or embedding_path is not None
+            or lora_scale is not _UNSET
         )
+        if loras is not None and singular_set:
+            raise ValueError(
+                "Pass either loras= or the singular fields "
+                "(lora_path / lora_scale / trigger / embedding_path), not both."
+            )
+
+        if loras is not None:
+            self.loras: list[LoraSpec] = list(loras)
+        elif lora_path is not None:
+            self.loras = [
+                LoraSpec(
+                    path=lora_path,
+                    scale=1.0 if lora_scale is _UNSET else float(lora_scale),  # type: ignore[arg-type]
+                    trigger=trigger,
+                    embedding_path=embedding_path,
+                )
+            ]
+        elif embedding_path is not None or trigger is not None:
+            raise ValueError(
+                "embedding_path / trigger require lora_path (pivotal embeddings "
+                "are scoped to a LoRA). Pass lora_path=... or use loras=[LoraSpec(...)]."
+            )
+        else:
+            self.loras = []
+
+        # Backward-compat singular attrs. The one-element case preserves legacy
+        # behavior for subclasses that still read them. Multi-LoRA leaves them
+        # None/1.0 — no single value is meaningful, and callers must migrate.
+        if len(self.loras) == 1:
+            spec = self.loras[0]
+            self.lora_path = spec.path
+            self.lora_scale = spec.scale
+            self.trigger = spec.trigger
+            self.embedding_path = spec.embedding_path
+        else:
+            self.lora_path = None
+            self.lora_scale = 1.0
+            self.trigger = None
+            self.embedding_path = None
 
     @abstractmethod
     def _load(self) -> None:
@@ -264,3 +311,46 @@ class ImageEngine(TwoPhaseMixin, ABC):
             return
         apply_pivotals_to_pipe(self._pipe, pivotals)
         _patch_encode_prompt(self._pipe)
+
+
+def preflight_check(engine: ImageEngine) -> None:
+    """Abort early if the system can't safely run this engine. Skipped if already loaded."""
+    if engine._pipe is not None:
+        return
+
+    import torch
+
+    # --- VRAM check ---
+    if torch.cuda.is_available():
+        free_vram, total_vram = torch.cuda.mem_get_info(0)
+        free_vram_gb = free_vram / 1024**3
+        if free_vram_gb < engine.vram_gb:
+            raise InsufficientResourcesError(
+                f"Engine {engine.name!r} needs ~{engine.vram_gb:.1f} GB VRAM, "
+                f"but only {free_vram_gb:.1f} GB / {total_vram / 1024**3:.1f} GB is free. "
+                f"Close other GPU processes (e.g. ollama) and retry."
+            )
+    else:
+        raise InsufficientResourcesError(
+            "No CUDA GPU detected. imagecli requires a CUDA-capable GPU."
+        )
+
+    # --- System RAM check ---
+    # GGUF engines load model weights into system RAM via enable_model_cpu_offload().
+    # Require at least engine.vram_gb of free RAM as a proxy for model size.
+    ram_needed_gb = max(MIN_FREE_RAM_GB, engine.vram_gb)
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    available_kb = int(line.split()[1])
+                    available_gb = available_kb / 1024 / 1024
+                    if available_gb < ram_needed_gb:
+                        raise InsufficientResourcesError(
+                            f"Only {available_gb:.1f} GB system RAM available, "
+                            f"need at least {ram_needed_gb:.1f} GB for engine "
+                            f"{engine.name!r}. Close other applications and retry."
+                        )
+                    break
+    except FileNotFoundError:
+        pass  # non-Linux, skip RAM check

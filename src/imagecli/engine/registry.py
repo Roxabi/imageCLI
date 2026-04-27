@@ -1,4 +1,4 @@
-"""Engine registry + factory. Kept separate from :mod:`imagecli.engine_base` so
+"""Engine registry + factory. Kept separate from :mod:`imagecli.engine.base` so
 the ABC module doesn't transitively import every concrete engine on startup.
 """
 
@@ -7,7 +7,7 @@ from __future__ import annotations
 import dataclasses
 import warnings
 
-from imagecli.engine_base import ImageEngine
+from .base import ImageEngine
 from imagecli.lora_spec import LoraSpec
 
 
