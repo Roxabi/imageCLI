@@ -4,8 +4,9 @@ and ``engine_registry`` (factory)."""
 
 from __future__ import annotations
 
-from imagecli.engine_base import ImageEngine, preflight_check
+from imagecli.engine_base import ImageEngine
 from imagecli.engine_helpers import (
+    preflight_check,
     MIN_FREE_RAM_GB,
     EngineCapabilities,
     InsufficientResourcesError,

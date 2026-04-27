@@ -3,6 +3,7 @@
   "pages": [
     "001-hardware-capability-detection-boundary",
     "046-imagecli-nats-ingress",
-    "047-lyra-subject-literal-confinement"
+    "047-lyra-subject-literal-confinement",
+    "048-engine-subpackage-split"
   ]
 }
