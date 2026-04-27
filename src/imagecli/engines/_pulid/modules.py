@@ -156,7 +156,10 @@ class IDFormer(nn.Module):
         for i in range(5):
             vit_feature = getattr(self, f"mapping_{i}")(y[i])
             ctx_feature = torch.cat((x, vit_feature), dim=1)
-            for attn, ff in cast(list[tuple[nn.Module, nn.Module]], list(self.layers[i * self.depth : (i + 1) * self.depth])):
+            for attn, ff in cast(
+                list[tuple[nn.Module, nn.Module]],
+                list(self.layers[i * self.depth : (i + 1) * self.depth]),
+            ):
                 latents = attn(ctx_feature, latents) + latents
                 latents = ff(latents) + latents
         latents = latents[:, : self.num_queries]

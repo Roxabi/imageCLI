@@ -209,12 +209,11 @@ class PuLIDFlux1DevEngine(ImageEngine):
         assert self._pulid is not None
         assert self._cached_id_tokens is not None
         from typing import Any, cast as _cast
+
         pipe: Any = self._pipe
         unpatch: Callable[[], None] = _cast(
             Callable[[], None],
-            patch_flux1(
-                pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength
-            ),
+            patch_flux1(pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength),
         )
         try:
             return super().generate(prompt, output_path=output_path, **kwargs)
