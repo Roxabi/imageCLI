@@ -1,0 +1,38 @@
+---
+title: "refactor(engine): regroup engine_{base,helpers,registry} into a subpackage to retire folder_size exemption"
+issue: 65
+status: approved
+tier: F-lite
+date: 2026-04-27
+---
+
+## Problem
+
+The `#57` engine.py split introduced `engine_base.py`, `engine_helpers.py`, and `engine_registry.py` as siblings in `src/imagecli/`, pushing the file count to 13 against the `folder_size.max_files: 12` gate. The breach was landed with an explicit exemption in `tools/folder_exemptions.txt`. This is technical debt that should be cleaned up by the proper fix: promoting those three modules into an `engine/` subpackage.
+
+## Who
+
+- **Primary:** maintainers running quality gates — the folder_size gate currently fires (and is suppressed), which erodes trust in the gate signal.
+- **Secondary:** downstream importers of `imagecli.engine` — re-export shim must keep the public API intact with zero churn.
+
+## Constraints
+
+- `from imagecli.engine import X` must keep working after the move (re-export shim in `engine/__init__.py`).
+- No new public API surface — this is a pure structural rename.
+- `src/imagecli/` file count must drop to ≤12 after the change, removing the exemption line.
+
+## Out of Scope
+
+- Changing behaviour of any engine class or function.
+- Reorganising the per-engine files under `engines/` (separate concern).
+- Adding new tests beyond what's needed to verify imports still resolve.
+
+## Complexity
+
+**Tier: F-lite** — single-domain file-move refactor with a re-export shim; clear scope, no architectural unknowns, affects ≤4 files plus the exemptions list.
+
+Signals:
+- Single domain (engine infra only)
+- ≤4 source files affected (`engine.py` → `engine/__init__.py`, + 3 module moves)
+- No new patterns or dependencies
+- Issue body fully specifies the solution
