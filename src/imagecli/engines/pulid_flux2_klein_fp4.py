@@ -113,7 +113,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         from diffusers import Flux2KleinPipeline
 
-        from imagecli.engines.nvfp4_quantize import runtime_quantize_transformer_to_nvfp4
+        from imagecli.engines.nvfp4 import runtime_quantize_transformer_to_nvfp4
 
         logger.info("Loading Flux2Klein BF16 base for PuLID-FP4…")
         self._pipe = Flux2KleinPipeline.from_pretrained(

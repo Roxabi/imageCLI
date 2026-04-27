@@ -302,7 +302,7 @@ def test_fp4_guard_does_not_fire_when_no_loras():
     The guard fires only when self.loras is non-empty.  With empty loras the
     method proceeds into the real load path, which we stub out entirely.
     """
-    import imagecli.engines.nvfp4_quantize as nvfp4_mod
+    import imagecli.engines.nvfp4 as nvfp4_mod
     from imagecli.engines.flux2_klein_fp4 import Flux2KleinFP4Engine
 
     engine = Flux2KleinFP4Engine(loras=[])

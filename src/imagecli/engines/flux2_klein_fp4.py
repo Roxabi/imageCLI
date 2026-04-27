@@ -75,7 +75,7 @@ class Flux2KleinFP4Engine(ImageEngine):
         from diffusers import Flux2KleinPipeline
         from huggingface_hub import hf_hub_download
 
-        from imagecli.engines.nvfp4_quantize import patch_transformer_nvfp4
+        from imagecli.engines.nvfp4 import patch_transformer_nvfp4
 
         logger.info("Loading base pipeline %s...", BASE_REPO)
         self._pipe = Flux2KleinPipeline.from_pretrained(BASE_REPO, torch_dtype=torch.bfloat16)

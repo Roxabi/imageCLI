@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from imagecli.engines.nvfp4_state_dict import (
+from imagecli.engines.nvfp4.state_dict import (
     NVFP4_SUFFIXES,
     convert_nvfp4_state_dict,
 )
