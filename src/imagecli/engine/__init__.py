@@ -1,14 +1,15 @@
 """Backward-compatible re-export shim — real code lives in the engine subpackage:
-``base`` (ABC + preflight), ``helpers`` (helpers/errors), ``registry`` (factory)."""
+``base`` (ABC), ``helpers`` (helpers/errors/preflight), ``registry`` (factory)."""
 
 from __future__ import annotations
 
-from .base import ImageEngine, preflight_check
+from .base import ImageEngine
 from .helpers import (
     MIN_FREE_RAM_GB,
     EngineCapabilities,
     InsufficientResourcesError,
     get_compute_capability,
+    preflight_check,
     warn_ignored_params,
 )
 from .registry import (

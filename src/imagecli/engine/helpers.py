@@ -1,7 +1,7 @@
 """Standalone helpers for :mod:`imagecli.engine.base`.
 
 Keeps small, easily-testable pieces out of the ABC module so it stays
-focused on ``ImageEngine`` + ``preflight_check``.
+focused on the ``ImageEngine`` ABC.
 
 The module-level environment side-effects (RAM cap, TF32 flag) live here
 so they execute exactly once regardless of which consumer imports first.
@@ -18,6 +18,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from .base import ImageEngine
+
+from imagecli.lora_spec import LoraSpec
+
+# Sentinel — distinguishes "lora_scale not passed" from "lora_scale=1.0 passed
+# explicitly". Needed to detect mixed-form use alongside ``loras=``.
+UNSET: object = object()
 
 logger = logging.getLogger(__name__)
 
@@ -156,3 +162,106 @@ class TwoPhaseMixin:
         callback: Callable[..., dict] | None = None,
     ) -> Path:
         raise NotImplementedError(f"{self.name} does not support 2-phase batch")
+
+
+def resolve_loras(
+    loras: list[LoraSpec] | None,
+    lora_path: str | None,
+    lora_scale: float | object,
+    trigger: str | None,
+    embedding_path: str | None,
+) -> list[LoraSpec]:
+    """Normalize singular/plural LoRA args into a canonical list[LoraSpec]."""
+    singular_set = (
+        lora_path is not None
+        or trigger is not None
+        or embedding_path is not None
+        or lora_scale is not UNSET
+    )
+    if loras is not None and singular_set:
+        raise ValueError(
+            "Pass either loras= or the singular fields "
+            "(lora_path / lora_scale / trigger / embedding_path), not both."
+        )
+    if loras is not None:
+        return list(loras)
+    if lora_path is not None:
+        return [
+            LoraSpec(
+                path=lora_path,
+                scale=1.0 if lora_scale is UNSET else float(lora_scale),  # type: ignore[arg-type]
+                trigger=trigger,
+                embedding_path=embedding_path,
+            )
+        ]
+    if embedding_path is not None or trigger is not None:
+        raise ValueError(
+            "embedding_path / trigger require lora_path (pivotal embeddings "
+            "are scoped to a LoRA). Pass lora_path=... or use loras=[LoraSpec(...)]."
+        )
+    return []
+
+
+def save_image(
+    image,
+    output_path: Path,
+    *,
+    engine_name: str,
+    seed: int,
+    steps: int,
+    guidance: float,
+    width: int,
+    height: int,
+) -> Path:
+    """Save image with PNG metadata for reproducibility."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    from PIL.PngImagePlugin import PngInfo
+
+    png_meta = PngInfo()
+    png_meta.add_text("seed", str(seed))
+    png_meta.add_text("engine", engine_name)
+    png_meta.add_text("steps", str(steps))
+    png_meta.add_text("guidance", str(guidance))
+    png_meta.add_text("width", str(width))
+    png_meta.add_text("height", str(height))
+    image.save(str(output_path), pnginfo=png_meta)
+    return output_path
+
+
+def preflight_check(engine: ImageEngine) -> None:
+    """Abort early if the system can't safely run this engine. Skipped if already loaded."""
+    if engine._pipe is not None:
+        return
+
+    import torch
+
+    if torch.cuda.is_available():
+        free_vram, total_vram = torch.cuda.mem_get_info(0)
+        free_vram_gb = free_vram / 1024**3
+        if free_vram_gb < engine.vram_gb:
+            raise InsufficientResourcesError(
+                f"Engine {engine.name!r} needs ~{engine.vram_gb:.1f} GB VRAM, "
+                f"but only {free_vram_gb:.1f} GB / {total_vram / 1024**3:.1f} GB is free. "
+                f"Close other GPU processes (e.g. ollama) and retry."
+            )
+    else:
+        raise InsufficientResourcesError(
+            "No CUDA GPU detected. imagecli requires a CUDA-capable GPU."
+        )
+
+    ram_needed_gb = max(MIN_FREE_RAM_GB, engine.vram_gb)
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    available_kb = int(line.split()[1])
+                    available_gb = available_kb / 1024 / 1024
+                    if available_gb < ram_needed_gb:
+                        raise InsufficientResourcesError(
+                            f"Only {available_gb:.1f} GB system RAM available, "
+                            f"need at least {ram_needed_gb:.1f} GB for engine "
+                            f"{engine.name!r}. Close other applications and retry."
+                        )
+                    break
+    except FileNotFoundError:
+        pass  # non-Linux, skip RAM check
