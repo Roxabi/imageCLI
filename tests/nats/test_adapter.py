@@ -208,7 +208,7 @@ class TestImageNatsAdapter:
 
         # Bypass path allowlist validation — this is a wiring test, not a security test
         with (
-            patch.object(adapter, "_validate_path", return_value=(True, None)),
+            patch("imagecli.nats.validators._validate_path", return_value=(True, None)),
             patch("imagecli.engine.get_engine", side_effect=_fake_get_engine),
             patch(
                 "imagecli.engine.list_engines",
@@ -257,7 +257,7 @@ class TestImageNatsAdapter:
 
         # Bypass path allowlist validation — this is a wiring test, not a security test
         with (
-            patch.object(adapter, "_validate_path", return_value=(True, None)),
+            patch("imagecli.nats.validators._validate_path", return_value=(True, None)),
             patch("imagecli.engine.get_engine", side_effect=_fake_get_engine),
             patch(
                 "imagecli.engine.list_engines",
