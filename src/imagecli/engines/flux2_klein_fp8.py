@@ -39,7 +39,7 @@ class Flux2KleinFP8Engine(ImageEngine):
             return
 
         try:
-            from torchao.quantization import Float8WeightOnlyConfig, quantize_
+            from torchao.quantization import Float8WeightOnlyConfig, quantize_  # type: ignore[import-untyped]
         except ImportError:
             raise RuntimeError(
                 "flux2-klein-fp8 requires torchao. Install with: uv sync --group fp8"
@@ -60,10 +60,10 @@ class Flux2KleinFP8Engine(ImageEngine):
             for i, spec in enumerate(self.loras):
                 name = f"lora_{i}"
                 logger.info("Loading LoRA %d/%d from %s...", i + 1, len(self.loras), spec.path)
-                self._pipe.load_lora_weights(spec.path, adapter_name=name)
+                self._pipe.load_lora_weights(spec.path, adapter_name=name)  # type: ignore[attr-defined]
                 adapter_names.append(name)
             if len(adapter_names) > 1:
-                self._pipe.set_adapters(
+                self._pipe.set_adapters(  # type: ignore[attr-defined]
                     adapter_names, adapter_weights=[s.scale for s in self.loras]
                 )
                 logger.info(
@@ -72,8 +72,8 @@ class Flux2KleinFP8Engine(ImageEngine):
                     [s.scale for s in self.loras],
                 )
             fuse_scale = self.loras[0].scale if len(self.loras) == 1 else 1.0
-            self._pipe.fuse_lora(lora_scale=fuse_scale)
-            self._pipe.unload_lora_weights()
+            self._pipe.fuse_lora(lora_scale=fuse_scale)  # type: ignore[attr-defined]
+            self._pipe.unload_lora_weights()  # type: ignore[attr-defined]
             logger.info("LoRA(s) fused into base weights.")
 
         # Pivotal tuning: load trained trigger vectors into the TE BEFORE
@@ -83,7 +83,7 @@ class Flux2KleinFP8Engine(ImageEngine):
 
         # Quantize transformer to FP8 via torchao (weight-only, no QLinear patch needed)
         logger.info("Quantizing transformer to FP8 via torchao...")
-        quantize_(self._pipe.transformer, Float8WeightOnlyConfig())
+        quantize_(self._pipe.transformer, Float8WeightOnlyConfig())  # type: ignore[attr-defined]
         logger.info("Transformer quantized to FP8 (torchao).")
 
     def _load(self):
@@ -91,7 +91,8 @@ class Flux2KleinFP8Engine(ImageEngine):
         if self._pipe is not None:
             return
         self._load_pipeline()
-        self._pipe.to("cuda")
+        assert self._pipe is not None
+        self._pipe.to("cuda")  # type: ignore[attr-defined]
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("Model ready (all on GPU, torchao FP8).")
 
@@ -101,23 +102,25 @@ class Flux2KleinFP8Engine(ImageEngine):
         """Patch pipeline execution device to cuda."""
         import torch
 
-        self._pipe._execution_device_override = torch.device("cuda")
+        assert self._pipe is not None
+        self._pipe._execution_device_override = torch.device("cuda")  # type: ignore[attr-defined]
         orig_cls = type(self._pipe)
         if not hasattr(orig_cls, "_orig_execution_device"):
-            orig_cls._orig_execution_device = orig_cls._execution_device
-            orig_cls._execution_device = property(
+            orig_cls._orig_execution_device = orig_cls._execution_device  # type: ignore[attr-defined]
+            orig_cls._execution_device = property(  # type: ignore[attr-defined]
                 lambda pipe: (
                     getattr(pipe, "_execution_device_override", None)
-                    or orig_cls._orig_execution_device.fget(pipe)
+                    or orig_cls._orig_execution_device.fget(pipe)  # type: ignore[attr-defined]
                 )
             )
 
     def load_all_on_gpu(self):
         """Load everything to GPU at once. No offloading between phases."""
         self._load_pipeline()
-        self._pipe.text_encoder.to("cuda")
-        self._pipe.transformer.to("cuda")
-        self._pipe.vae.to("cuda")
+        assert self._pipe is not None
+        self._pipe.text_encoder.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
         self._set_execution_device()
         # No QLinear → compile works!
         self._optimize_pipe(self._pipe)
@@ -158,8 +161,9 @@ class Flux2KleinFP8Engine(ImageEngine):
         if callback is not None:
             pipe_kwargs["callback_on_step_end"] = callback
 
+        assert self._pipe is not None
         with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)
+            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
 
         image = result.images[0]
         return self._save_image(
@@ -177,15 +181,17 @@ class Flux2KleinFP8Engine(ImageEngine):
     def load_for_encode(self):
         """Phase 1 setup: load pipeline, move text encoder to GPU (~8 GB)."""
         self._load_pipeline()
-        self._pipe.text_encoder.to("cuda")
+        assert self._pipe is not None
+        self._pipe.text_encoder.to("cuda")  # type: ignore[attr-defined]
         logger.info("Text encoder on GPU — ready for prompt encoding.")
 
     def encode_prompt(self, prompt: str) -> dict:
         """Encode a single prompt. Returns embeddings dict (on CPU to free VRAM)."""
         import torch
 
+        assert self._pipe is not None
         with torch.inference_mode():
-            prompt_embeds, text_ids = self._pipe.encode_prompt(
+            prompt_embeds, text_ids = self._pipe.encode_prompt(  # type: ignore[attr-defined]
                 prompt=prompt,
                 device="cuda",
                 num_images_per_prompt=1,
@@ -201,12 +207,13 @@ class Flux2KleinFP8Engine(ImageEngine):
 
         import torch
 
-        self._pipe.text_encoder.to("cpu")
+        assert self._pipe is not None
+        self._pipe.text_encoder.to("cpu")  # type: ignore[attr-defined]
         torch.cuda.empty_cache()
         gc.collect()
 
-        self._pipe.transformer.to("cuda")
-        self._pipe.vae.to("cuda")
+        self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
         self._set_execution_device()
         # No QLinear → compile works in 2-phase too!
         self._optimize_pipe(self._pipe)
@@ -247,8 +254,9 @@ class Flux2KleinFP8Engine(ImageEngine):
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
+        assert self._pipe is not None
         with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)
+            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
 
         image = result.images[0]
         return self._save_image(

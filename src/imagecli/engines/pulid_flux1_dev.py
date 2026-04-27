@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import torch
@@ -198,14 +199,22 @@ class PuLIDFlux1DevEngine(ImageEngine):
             self._cached_face_path = face_image
             # EVA-CLIP is done — move to CPU permanently (only needed for extraction)
             if self._eva_clip_trunk is not None:
-                self._eva_clip_trunk.to("cpu")
+                self._eva_clip_trunk.to("cpu")  # type: ignore[union-attr]
             if self._eva_clip_head is not None:
-                self._eva_clip_head.to("cpu")
+                self._eva_clip_head.to("cpu")  # type: ignore[union-attr]
             gc.collect()
             torch.cuda.empty_cache()
 
-        unpatch = patch_flux1(
-            self._pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength
+        assert self._pipe is not None
+        assert self._pulid is not None
+        assert self._cached_id_tokens is not None
+        from typing import Any, cast as _cast
+        pipe: Any = self._pipe
+        unpatch: Callable[[], None] = _cast(
+            Callable[[], None],
+            patch_flux1(
+                pipe.transformer, self._pulid, self._cached_id_tokens, pulid_strength
+            ),
         )
         try:
             return super().generate(prompt, output_path=output_path, **kwargs)

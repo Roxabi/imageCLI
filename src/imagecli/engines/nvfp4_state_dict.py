@@ -11,6 +11,8 @@ imports.
 
 from __future__ import annotations
 
+from typing import cast
+
 __all__ = ["NVFP4_SUFFIXES", "convert_nvfp4_state_dict"]
 
 _RENAME = {
@@ -80,6 +82,7 @@ def convert_nvfp4_state_dict(raw: dict[str, object]) -> dict[str, object]:
         rest = ".".join(parts[2:])
 
         # Check for NVFP4 suffix
+        within = ""
         suffix = None
         for s in NVFP4_SUFFIXES + (".scale",):
             if rest.endswith(s.lstrip(".")):
@@ -96,7 +99,7 @@ def convert_nvfp4_state_dict(raw: dict[str, object]) -> dict[str, object]:
 
         if "qkv" in within:
             # Fused QKV → split into Q, K, V (split dim=0 into 3 chunks)
-            tensor = raw.pop(key)
+            tensor = cast("torch.Tensor", raw.pop(key))
             if tensor.dim() >= 1:
                 chunks = torch.chunk(tensor, 3, dim=0)
             else:
@@ -127,6 +130,7 @@ def convert_nvfp4_state_dict(raw: dict[str, object]) -> dict[str, object]:
         block_idx = parts[1]
         rest = ".".join(parts[2:])
 
+        within = ""
         suffix = None
         for s in NVFP4_SUFFIXES + (".scale",):
             if rest.endswith(s.lstrip(".")):

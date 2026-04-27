@@ -76,7 +76,7 @@ def test_no_cli_imports_at_module_level():
         }
 
         # Act
-        import imagecli  # noqa: F401  (re-import after cache clear)
+        import imagecli  # noqa: F401  # pyright: ignore[reportUnusedImport]  (re-import after cache clear)
 
         # Assert
         new_cli_keys = {

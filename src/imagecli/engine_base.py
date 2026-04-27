@@ -162,9 +162,10 @@ class ImageEngine(TwoPhaseMixin, ABC):
             torch.cuda.reset_peak_memory_stats()
 
         with torch.inference_mode():
+            assert callable(self._pipe), "Pipeline must be loaded before generate()"
             result = self._pipe(**pipe_kwargs)
 
-        image = result.images[0]
+        image = result.images[0]  # type: ignore[union-attr]
         return self._save_image(
             image,
             output_path,
@@ -212,7 +213,7 @@ class ImageEngine(TwoPhaseMixin, ABC):
                     f"but only {free_vram_gb:.1f} GB is free. "
                     f"Close other GPU processes and retry."
                 )
-            pipe.to("cuda")
+            pipe.to("cuda")  # type: ignore[union-attr]
         self._optimize_pipe(pipe)
 
     def _optimize_pipe(self, pipe: object, *, compile: bool | None = None) -> None:
@@ -230,17 +231,17 @@ class ImageEngine(TwoPhaseMixin, ABC):
 
         # VAE optimizations — reduce peak VRAM for large images and batches
         if hasattr(pipe, "vae"):
-            pipe.vae.enable_tiling()
-            pipe.vae.enable_slicing()
+            pipe.vae.enable_tiling()  # type: ignore[union-attr]
+            pipe.vae.enable_slicing()  # type: ignore[union-attr]
 
         # torch.compile — 20-40% speedup after first-run warmup
         should_compile = self._compile if compile is None else compile
         if should_compile and not self._compiled:
             compilable = None
             if hasattr(pipe, "transformer"):
-                compilable = pipe.transformer
+                compilable = pipe.transformer  # type: ignore[union-attr]
             elif hasattr(pipe, "unet"):
-                compilable = pipe.unet
+                compilable = pipe.unet  # type: ignore[union-attr]
             if compilable is not None:
                 pipe_attr = "transformer" if hasattr(pipe, "transformer") else "unet"
                 logger.info(
@@ -294,7 +295,8 @@ class ImageEngine(TwoPhaseMixin, ABC):
             load_pivotal_embedding,
         )
 
-        te_hidden_size = self._pipe.text_encoder.config.hidden_size
+        assert self._pipe is not None, "Pipeline must be loaded before _apply_pivotal_embeddings()"
+        te_hidden_size = self._pipe.text_encoder.config.hidden_size  # type: ignore[union-attr]
         pivotals = []
         for spec in self.loras:
             p = load_pivotal_embedding(

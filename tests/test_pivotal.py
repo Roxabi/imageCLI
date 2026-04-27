@@ -67,26 +67,27 @@ def _make_mock_pipe(initial_vocab: int = 151669, hidden: int = 2560):
     pipe = MagicMock()
 
     # Tokenizer — start with empty added_tokens_encoder, grow on add_tokens
-    tok_state = {"vocab_size": initial_vocab, "added": {}}
+    tok_added: dict[str, int] = {}
+    tok_state = {"vocab_size": initial_vocab}
 
     def _add_tokens(tokens):
         added = 0
         for t in tokens:
-            if t not in tok_state["added"]:
-                tok_state["added"][t] = tok_state["vocab_size"] + added
+            if t not in tok_added:
+                tok_added[t] = tok_state["vocab_size"] + added
                 added += 1
         tok_state["vocab_size"] += added
         return added
 
     def _convert_to_id(t):
-        return tok_state["added"].get(t, -1)
+        return tok_added.get(t, -1)
 
     tokenizer = MagicMock()
     tokenizer.add_tokens = MagicMock(side_effect=_add_tokens)
     tokenizer.convert_tokens_to_ids = MagicMock(side_effect=_convert_to_id)
     tokenizer.__len__ = MagicMock(side_effect=lambda: tok_state["vocab_size"])
     tokenizer.tokenize = MagicMock(side_effect=lambda s: s.split())
-    tokenizer.added_tokens_encoder = tok_state["added"]
+    tokenizer.added_tokens_encoder = tok_added
     pipe.tokenizer = tokenizer
 
     # Text encoder — embed_tokens is a real nn.Embedding so slicing works

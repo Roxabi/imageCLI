@@ -19,6 +19,7 @@ from any risk of a random-init regression on the projection layers.
 from __future__ import annotations
 
 import logging
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -122,8 +123,8 @@ def patch_flux2(
         dtype=id_tokens.dtype,
     )
 
-    orig_d: dict[int, object] = {}
-    orig_s: dict[int, object] = {}
+    orig_d: dict[int, Callable[..., Any]] = {}
+    orig_s: dict[int, Callable[..., Any]] = {}
 
     for idx, block in enumerate(double_blocks):
         orig_d[idx] = block.forward
@@ -145,7 +146,7 @@ def patch_flux2(
                     temb_mod_txt=temb_mod_txt,
                     **kwargs,
                 )
-                ca = pulid.double_ca[_ca_index(i, n_d, len(pulid.double_ca))]
+                ca = cast(KleinPerceiverAttentionCA, pulid.double_ca[_ca_index(i, n_d, len(pulid.double_ca))])
                 img_bf = img_hs.to(torch.bfloat16)
                 correction = _apply_ca(ca, img_bf, id_tokens, projections)
                 return enc_hs, img_bf + strength * _scale(i, n_d, "double") * correction
@@ -166,7 +167,7 @@ def patch_flux2(
                     temb_mod=temb_mod,
                     **kwargs,
                 )
-                ca = pulid.single_ca[_ca_index(i, n_s, len(pulid.single_ca))]
+                ca = cast(KleinPerceiverAttentionCA, pulid.single_ca[_ca_index(i, n_s, len(pulid.single_ca))])
                 out_bf = out_hs.to(torch.bfloat16)
                 correction = _apply_ca(ca, out_bf, id_tokens, projections)
                 return out_bf + strength * _scale(i, n_s, "single") * correction

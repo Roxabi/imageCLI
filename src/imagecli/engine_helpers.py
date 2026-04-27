@@ -104,14 +104,14 @@ def quantize_transformer(pipe: object, sm: tuple[int, int]) -> str:
         if sm >= (8, 9):
             from optimum.quanto import qfloat8  # type: ignore[import-untyped]
 
-            quantize(pipe.transformer, weights=qfloat8)
+            quantize(pipe.transformer, weights=qfloat8)  # type: ignore[union-attr]
             qtype = "fp8"
         else:
             from optimum.quanto import qint8  # type: ignore[import-untyped]
 
-            quantize(pipe.transformer, weights=qint8)
+            quantize(pipe.transformer, weights=qint8)  # type: ignore[union-attr]
             qtype = "int8"
-        freeze(pipe.transformer)
+        freeze(pipe.transformer)  # type: ignore[union-attr]
         return qtype
     except ImportError as e:
         raise RuntimeError(

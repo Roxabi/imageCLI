@@ -213,7 +213,7 @@ def _maybe_convert_prompt(prompt: str, tokenizer) -> str:
     return " ".join(out_tokens)
 
 
-def _patch_encode_prompt(pipe) -> None:
+def _patch_encode_prompt(pipe) -> None:  # pyright: ignore[reportUnusedFunction]
     """Wrap ``pipe.encode_prompt`` to expand bare triggers before tokenization.
 
     Instance-level monkey-patch (does not touch the class). Idempotent via

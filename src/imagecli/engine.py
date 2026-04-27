@@ -13,7 +13,7 @@ from imagecli.engine_helpers import (
     warn_ignored_params,
 )
 from imagecli.engine_registry import (
-    _get_registry,  # noqa: F401 — re-exported for existing callers (tests/test_engine.py)
+    _get_registry,  # noqa: F401  # pyright: ignore[reportUnusedImport] — re-exported for existing callers (tests/test_engine.py)
     get_engine,
     list_engines,
 )

@@ -285,21 +285,24 @@ def test_get_compute_capability_with_cuda():
 def test_sm_tuple_fp8_threshold_boundary():
     # Arrange: boundary values for the quantization dtype selection rule.
     # fp8 is used when sm >= (8, 9); int8 is used when sm < (8, 9).
+    from typing import cast
+
+    threshold = cast(tuple[int, int], (8, 9))
 
     # Act / Assert: Ada Lovelace boundary — exactly at threshold → fp8
-    assert (8, 9) >= (8, 9)
+    assert cast(tuple[int, int], (8, 9)) >= threshold
 
     # Act / Assert: Ampere sm_86 is below threshold → int8
-    assert (8, 6) < (8, 9)
+    assert cast(tuple[int, int], (8, 6)) < threshold
 
     # Act / Assert: Blackwell sm_120 is above threshold → fp8
-    assert (12, 0) >= (8, 9)
+    assert cast(tuple[int, int], (12, 0)) >= threshold
 
     # Act / Assert: Turing sm_75 is below threshold → int8
-    assert (7, 5) < (8, 9)
+    assert cast(tuple[int, int], (7, 5)) < threshold
 
     # Act / Assert: Hopper sm_90 is above threshold → fp8
-    assert (9, 0) >= (8, 9)
+    assert cast(tuple[int, int], (9, 0)) >= threshold
 
 
 def test_get_compute_capability_blackwell():

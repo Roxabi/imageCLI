@@ -16,6 +16,8 @@ function-local — nothing at import time.
 
 from __future__ import annotations
 
+from typing import cast
+
 from imagecli.engines.nvfp4_state_dict import (
     NVFP4_SUFFIXES,
     convert_nvfp4_state_dict,
@@ -33,7 +35,7 @@ def runtime_quantize_transformer_to_nvfp4(transformer) -> int:
     Returns the number of layers quantized.
     """
     import torch
-    from comfy_kitchen.tensor import QuantizedTensor
+    from comfy_kitchen.tensor import QuantizedTensor  # type: ignore[import-not-found]
 
     quantized = 0
     for module in transformer.modules():
@@ -51,8 +53,8 @@ def runtime_quantize_transformer_to_nvfp4(transformer) -> int:
 def patch_transformer_nvfp4(transformer, nvfp4_path: str) -> int:
     """Replace linear layer weights with NVFP4 QuantizedTensors."""
     import torch
-    from comfy_kitchen.tensor import QuantizedTensor
-    from comfy_kitchen.tensor.nvfp4 import TensorCoreNVFP4Layout as NVFP4
+    from comfy_kitchen.tensor import QuantizedTensor  # type: ignore[import-not-found]
+    from comfy_kitchen.tensor.nvfp4 import TensorCoreNVFP4Layout as NVFP4  # type: ignore[import-not-found]
     from safetensors import safe_open
 
     # Load and convert BFL keys to diffusers keys
@@ -75,12 +77,15 @@ def patch_transformer_nvfp4(transformer, nvfp4_path: str) -> int:
         if ".weight" not in tensors or ".weight_scale" not in tensors:
             continue
 
-        weight = tensors[".weight"]
+        weight = cast("torch.Tensor", tensors[".weight"])
         if weight.dtype != torch.uint8:
             continue  # Not a quantized layer
 
-        block_scale = tensors[".weight_scale"]
-        global_scale = tensors.get(".weight_scale_2", torch.tensor(1.0, dtype=torch.float32))
+        block_scale = cast("torch.Tensor", tensors[".weight_scale"])
+        global_scale = cast(
+            "torch.Tensor",
+            tensors.get(".weight_scale_2", torch.tensor(1.0, dtype=torch.float32)),
+        )
 
         orig_shape = (weight.shape[0], weight.shape[1] * 2)
         params = NVFP4.Params(
@@ -120,9 +125,10 @@ def patch_transformer_nvfp4(transformer, nvfp4_path: str) -> int:
                 break
         if module is not None and hasattr(module, param_name):
             param = getattr(module, param_name)
+            t = cast("torch.Tensor", tensor)
             if isinstance(param, torch.nn.Parameter):
-                param.data.copy_(tensor.to(param.device))
+                param.data.copy_(t.to(param.device))
             elif isinstance(param, torch.Tensor):
-                param.copy_(tensor.to(param.device))
+                param.copy_(t.to(param.device))
 
     return patched

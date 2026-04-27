@@ -49,7 +49,7 @@ class Flux2KleinFP4Engine(ImageEngine):
         if cuda_ver and int(cuda_ver.split(".")[0]) < 13:
             raise RuntimeError(f"NVFP4 requires CUDA 13.0+ (cu130), got {cuda_ver}.")
         try:
-            import comfy_kitchen  # noqa: F401
+            import comfy_kitchen  # noqa: F401  # type: ignore[import-not-found]
         except ImportError:
             raise RuntimeError(
                 "flux2-klein-fp4 requires comfy-kitchen. Install: uv sync --group fp4"
@@ -95,14 +95,14 @@ class Flux2KleinFP4Engine(ImageEngine):
     def _set_execution_device(self):
         import torch
 
-        self._pipe._execution_device_override = torch.device("cuda")
+        self._pipe._execution_device_override = torch.device("cuda")  # type: ignore[union-attr]
         orig_cls = type(self._pipe)
         if not hasattr(orig_cls, "_orig_execution_device"):
-            orig_cls._orig_execution_device = orig_cls._execution_device
-            orig_cls._execution_device = property(
+            orig_cls._orig_execution_device = orig_cls._execution_device  # type: ignore[attr-defined]
+            orig_cls._execution_device = property(  # type: ignore[attr-defined]
                 lambda pipe: (
                     getattr(pipe, "_execution_device_override", None)
-                    or orig_cls._orig_execution_device.fget(pipe)
+                    or orig_cls._orig_execution_device.fget(pipe)  # type: ignore[attr-defined]
                 )
             )
 
@@ -110,8 +110,8 @@ class Flux2KleinFP4Engine(ImageEngine):
         if self._pipe is not None:
             return
         self._load_pipeline()
-        self._pipe.vae.to("cuda")
-        self._pipe.text_encoder.to("cuda")
+        self._pipe.vae.to("cuda")  # type: ignore[union-attr]
+        self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
         self._optimize_pipe(self._pipe, compile=False)
         self._set_execution_device()
         logger.info("Model ready (all on GPU, NVFP4 transformer).")
@@ -120,8 +120,8 @@ class Flux2KleinFP4Engine(ImageEngine):
 
     def load_all_on_gpu(self):
         self._load_pipeline()
-        self._pipe.text_encoder.to("cuda")
-        self._pipe.vae.to("cuda")
+        self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
+        self._pipe.vae.to("cuda")  # type: ignore[union-attr]
         self._set_execution_device()
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("All components on GPU — NVFP4 transformer.")
@@ -159,7 +159,7 @@ class Flux2KleinFP4Engine(ImageEngine):
             pipe_kwargs["callback_on_step_end"] = callback
 
         with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)
+            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
 
         return self._save_image(
             result.images[0],
@@ -175,14 +175,14 @@ class Flux2KleinFP4Engine(ImageEngine):
 
     def load_for_encode(self):
         self._load_pipeline()
-        self._pipe.text_encoder.to("cuda")
+        self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
         logger.info("Text encoder on GPU — ready for prompt encoding.")
 
     def encode_prompt(self, prompt: str) -> dict:
         import torch
 
         with torch.inference_mode():
-            prompt_embeds, text_ids = self._pipe.encode_prompt(
+            prompt_embeds, text_ids = self._pipe.encode_prompt(  # type: ignore[union-attr]
                 prompt=prompt,
                 device="cuda",
                 num_images_per_prompt=1,
@@ -193,10 +193,10 @@ class Flux2KleinFP4Engine(ImageEngine):
         import gc
         import torch
 
-        self._pipe.text_encoder.to("cpu")
+        self._pipe.text_encoder.to("cpu")  # type: ignore[union-attr]
         torch.cuda.empty_cache()
         gc.collect()
-        self._pipe.vae.to("cuda")
+        self._pipe.vae.to("cuda")  # type: ignore[union-attr]
         self._set_execution_device()
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("Generation phase ready (NVFP4 transformer + VAE on GPU).")
@@ -234,7 +234,7 @@ class Flux2KleinFP4Engine(ImageEngine):
             torch.cuda.reset_peak_memory_stats()
 
         with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)
+            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
 
         return self._save_image(
             result.images[0],

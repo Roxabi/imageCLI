@@ -123,9 +123,9 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
             negative_prompt = job.get("negative_prompt", "")
 
             with torch.no_grad():
-                prompt_embeds, text_ids = encoder_pipe.encode_prompt(prompt=prompt)
+                prompt_embeds, text_ids = encoder_pipe.encode_prompt(prompt=prompt)  # type: ignore[union-attr]
                 neg_embeds, neg_text_ids = (
-                    encoder_pipe.encode_prompt(prompt=negative_prompt)
+                    encoder_pipe.encode_prompt(prompt=negative_prompt)  # type: ignore[union-attr]
                     if negative_prompt
                     else (None, None)
                 )
@@ -207,6 +207,7 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
             )
 
             with torch.no_grad():
+                assert callable(pipe), "pipe must be callable"
                 result = pipe(
                     prompt_embeds=prompt_embeds,
                     negative_prompt_embeds=neg_embeds,
@@ -220,7 +221,7 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
             meta.add_text("seed", str(seed))
             meta.add_text("steps", str(steps))
             meta.add_text("id", job_id)
-            result.images[0].save(out_path, pnginfo=meta)
+            result.images[0].save(out_path, pnginfo=meta)  # type: ignore[union-attr]
 
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed

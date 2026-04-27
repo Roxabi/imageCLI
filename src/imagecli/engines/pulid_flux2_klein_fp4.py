@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable, cast
 
 from imagecli.engine import EngineCapabilities, ImageEngine
 from imagecli.engines._pulid import PuLIDFlux2, extract_id_tokens, patch_flux2
@@ -66,7 +67,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
                 f"pulid-flux2-klein-fp4 requires CUDA 13.0+ (cu130), got {cuda_ver}."
             )
         try:
-            import comfy_kitchen  # noqa: F401
+            import comfy_kitchen  # type: ignore[import-not-found]  # noqa: F401
         except ImportError:
             raise RuntimeError(
                 "pulid-flux2-klein-fp4 requires comfy-kitchen. "
@@ -201,6 +202,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         import torch
 
         self._load()
+        assert self._pulid is not None
 
         # ── Step 1: face id tokens (EVA-CLIP temporarily on CUDA) ─────────────
         if self._eva_clip is not None:
@@ -247,7 +249,10 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         if callback is not None:
             pipe_kwargs["callback_on_step_end"] = callback
 
-        unpatch = patch_flux2(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)  # type: ignore[union-attr]
+        unpatch: Callable[[], None] = cast(
+            Callable[[], None],
+            patch_flux2(self._pipe.transformer, self._pulid, id_tokens, pulid_strength),  # type: ignore[union-attr]
+        )
         try:
             with torch.inference_mode():
                 result = self._pipe(**pipe_kwargs)  # type: ignore[union-attr]

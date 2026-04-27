@@ -160,8 +160,8 @@ def load_pipe():
     """Load FLUX.2-klein-4B transformer (fp8 quantized) + VAE. Deferred heavy imports."""
     import torch
     from diffusers import Flux2KleinPipeline
-    from optimum.quanto import freeze, qfloat8, quantize
-    from optimum.quanto.nn import QLinear
+    from optimum.quanto import freeze, qfloat8, quantize  # type: ignore[import-untyped]
+    from optimum.quanto.nn import QLinear  # type: ignore[import-untyped]
 
     _check_vram(_VRAM_TRANSFORMER_VAE, "transformer+VAE")
 
@@ -178,7 +178,7 @@ def load_pipe():
     def _cont(self, inp):  # noqa: ANN001, ANN202
         return _orig(self, inp.contiguous())
 
-    QLinear.forward = _cont
+    QLinear.forward = _cont  # type: ignore[method-assign]
 
     pipe.transformer.to("cuda")
     pipe.vae.to("cuda")

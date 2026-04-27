@@ -122,7 +122,7 @@ def run_generate(
 ):
     from imagecli.engine import ImageEngine, get_engine, preflight_check, warn_ignored_params
 
-    engine: ImageEngine = engine_instance or get_engine(
+    engine: ImageEngine = engine_instance or get_engine(  # type: ignore[assignment]
         engine_name,
         compile=compile,
         loras=loras or [],

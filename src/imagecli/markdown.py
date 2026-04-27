@@ -8,12 +8,13 @@ from pathlib import Path
 
 from imagecli.lora_spec import MAX_LORAS, LoraSpec
 
+_has_yaml: bool = False
 try:
     import yaml  # type: ignore[import-untyped]
 
-    _HAS_YAML = True
+    _has_yaml = True
 except ImportError:
-    _HAS_YAML = False
+    pass
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -84,8 +85,8 @@ def parse_prompt_file(path: Path) -> PromptDoc:
     if m:
         fm_text = m.group(1)
         body = text[m.end() :].strip()
-        if _HAS_YAML:
-            frontmatter = yaml.safe_load(fm_text) or {}
+        if _has_yaml:
+            frontmatter = yaml.safe_load(fm_text) or {}  # type: ignore[possibly-unbound]
         else:
             # fallback: try key: value pairs
             for line in fm_text.splitlines():

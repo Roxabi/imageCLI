@@ -9,6 +9,8 @@ restores the original forwards. Incompatible with ``torch.compile`` since
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 import torch
 
 from .modules import _DOUBLE_INTERVAL, _SINGLE_INTERVAL, PuLIDFlux1
@@ -39,12 +41,12 @@ def patch_flux1(
 
     Returns a callable that restores original forward methods.
     """
-    dm = transformer
+    dm: Any = transformer
     double_blocks = list(dm.transformer_blocks)
     single_blocks = list(dm.single_transformer_blocks)
 
-    orig_d: dict[int, object] = {}
-    orig_s: dict[int, object] = {}
+    orig_d: dict[int, Callable[..., Any]] = {}
+    orig_s: dict[int, Callable[..., Any]] = {}
 
     ca_idx = 0
 
@@ -57,11 +59,11 @@ def patch_flux1(
 
         def make_double(i: int, ci: int):
             def patched(
-                hidden_states: torch.Tensor = None,
-                encoder_hidden_states: torch.Tensor = None,
-                temb: torch.Tensor = None,
-                image_rotary_emb=None,
-                joint_attention_kwargs=None,
+                hidden_states: torch.Tensor | None = None,
+                encoder_hidden_states: torch.Tensor | None = None,
+                temb: torch.Tensor | None = None,
+                image_rotary_emb: Any = None,
+                joint_attention_kwargs: Any = None,
             ):
                 enc_hs, img_hs = orig_d[i](
                     hidden_states=hidden_states,
@@ -86,11 +88,11 @@ def patch_flux1(
 
         def make_single(i: int, ci: int):
             def patched(
-                hidden_states: torch.Tensor = None,
-                encoder_hidden_states: torch.Tensor = None,
-                temb: torch.Tensor = None,
-                image_rotary_emb=None,
-                joint_attention_kwargs=None,
+                hidden_states: torch.Tensor | None = None,
+                encoder_hidden_states: torch.Tensor | None = None,
+                temb: torch.Tensor | None = None,
+                image_rotary_emb: Any = None,
+                joint_attention_kwargs: Any = None,
             ):
                 # FluxSingleTransformerBlock.forward internally concatenates
                 # encoder_hidden_states + hidden_states, processes them, then

@@ -23,24 +23,18 @@ import pytest
 
 try:
     from imagecli.nats.adapter import (
-        HEARTBEAT_SUBJECT,
-        SCHEMA_VERSION,
-        SUBJECT,
         ImageNatsAdapter,
     )
 
-    _IMPORT_ERROR: ImportError | None = None
+    _import_error = None
 except ImportError as _e:
-    _IMPORT_ERROR = _e
+    _import_error = _e
     ImageNatsAdapter = None  # type: ignore[assignment,misc]
-    SUBJECT = "lyra.image.generate.request"  # type: ignore[assignment]
-    HEARTBEAT_SUBJECT = "lyra.image.heartbeat"  # type: ignore[assignment]
-    SCHEMA_VERSION = "1"  # type: ignore[assignment]
 
 
 def _require_imports() -> None:
-    if _IMPORT_ERROR is not None:
-        pytest.fail(f"imagecli.nats.adapter not yet implemented (RED): {_IMPORT_ERROR}")
+    if _import_error is not None:
+        pytest.fail(f"imagecli.nats.adapter not yet implemented (RED): {_import_error}")
 
 
 # ---------------------------------------------------------------------------
@@ -90,12 +84,13 @@ def _valid_payload(
     return payload
 
 
-def _make_adapter(**kwargs) -> "ImageNatsAdapter":
-    defaults = {
+def _make_adapter(**kwargs):  # type: ignore[return]
+    assert ImageNatsAdapter is not None, "ImageNatsAdapter not imported"
+    defaults: dict[str, object] = {
         "max_concurrent": 1,
     }
     defaults.update(kwargs)
-    adapter = ImageNatsAdapter(**defaults)
+    adapter = ImageNatsAdapter(**defaults)  # type: ignore[arg-type]
 
     # Mock the reply method to capture replies on the msg object
     # This is needed because NatsAdapterBase.reply() uses a NATS connection

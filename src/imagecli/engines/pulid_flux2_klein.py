@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any, Callable, cast
 
 import torch
 
@@ -100,6 +101,7 @@ class PuLIDFlux2KleinEngine(ImageEngine):
         logger.info("PuLID engine ready.")
 
     def _extract_id_tokens(self, face_image_paths: str | list[str]) -> torch.Tensor:
+        assert self._pulid is not None
         return extract_id_tokens(self._insightface, self._eva_clip, self._pulid, face_image_paths)
 
     def generate(
@@ -121,21 +123,27 @@ class PuLIDFlux2KleinEngine(ImageEngine):
             )
 
         self._load()
+        assert self._pipe is not None
+        assert self._pulid is not None
         id_tokens = self._extract_id_tokens(refs)
 
         # EVA-CLIP and InsightFace are done — move EVA-CLIP to CPU to free ~1 GB before inference
         if self._eva_clip is not None:
-            self._eva_clip.to("cpu")
+            self._eva_clip.to("cpu")  # type: ignore[union-attr]
         torch.cuda.empty_cache()
 
-        unpatch = patch_flux2(self._pipe.transformer, self._pulid, id_tokens, pulid_strength)
+        pipe: Any = self._pipe
+        unpatch: Callable[[], None] = cast(
+            Callable[[], None],
+            patch_flux2(pipe.transformer, self._pulid, id_tokens, pulid_strength),
+        )
         try:
             return super().generate(prompt, output_path=output_path, **kwargs)
         finally:
             unpatch()
             # restore EVA-CLIP to GPU for next generation
             if self._eva_clip is not None:
-                self._eva_clip.to("cuda")
+                self._eva_clip.to("cuda")  # type: ignore[union-attr]
 
     def cleanup(self) -> None:
         self._pulid = None

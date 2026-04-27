@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -28,7 +29,7 @@ _NUM_CA = math.ceil(_N_DOUBLE / _DOUBLE_INTERVAL) + math.ceil(_N_SINGLE / _SINGL
 
 
 def _reshape_tensor(x: torch.Tensor, heads: int) -> torch.Tensor:
-    bs, length, width = x.shape
+    bs, length, _width = x.shape
     x = x.view(bs, length, heads, -1)
     x = x.transpose(1, 2)
     return x.reshape(bs, heads, length, -1)
@@ -155,7 +156,7 @@ class IDFormer(nn.Module):
         for i in range(5):
             vit_feature = getattr(self, f"mapping_{i}")(y[i])
             ctx_feature = torch.cat((x, vit_feature), dim=1)
-            for attn, ff in self.layers[i * self.depth : (i + 1) * self.depth]:
+            for attn, ff in cast(list[tuple[nn.Module, nn.Module]], list(self.layers[i * self.depth : (i + 1) * self.depth])):
                 latents = attn(ctx_feature, latents) + latents
                 latents = ff(latents) + latents
         latents = latents[:, : self.num_queries]
