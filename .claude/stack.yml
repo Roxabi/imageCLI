@@ -29,7 +29,7 @@ commands:
   test: uv run pytest
   lint: uv run ruff check .
   format: uv run ruff format .
-  typecheck: uv run ruff check --select=PYI .
+  typecheck: uv run pyright
   install: uv sync
 
 artifacts:

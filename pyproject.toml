@@ -61,6 +61,24 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+reportPrivateUsage = "none"
+# torch/diffusers/transformers have no complete stubs — suppress unknowns from untyped deps
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportMissingParameterType = "none"
+reportUnknownLambdaType = "none"
+reportMissingTypeArgument = "none"
+# torch exports dtypes/ops via __init__ but stubs don't re-export them
+reportPrivateImportUsage = "none"
+
 [dependency-groups]
 dev = [
     "ruff",
@@ -69,6 +87,7 @@ dev = [
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
     "import-linter>=2.0,<3.0",
+    "pyright>=1.1.408",
 ]
 fp8 = [
     "torchao>=0.17.0",
