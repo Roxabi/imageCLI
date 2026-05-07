@@ -12,7 +12,6 @@ import types
 def test_engine_base_imports():
     mod = importlib.import_module("imagecli.engine.base")
     assert hasattr(mod, "ImageEngine")
-    assert hasattr(mod, "preflight_check")
 
 
 def test_engine_helpers_imports():
@@ -21,6 +20,7 @@ def test_engine_helpers_imports():
     assert hasattr(mod, "InsufficientResourcesError")
     assert hasattr(mod, "MIN_FREE_RAM_GB")
     assert hasattr(mod, "get_compute_capability")
+    assert hasattr(mod, "preflight_check")
     assert hasattr(mod, "warn_ignored_params")
 
 
