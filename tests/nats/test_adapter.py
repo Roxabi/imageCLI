@@ -444,4 +444,9 @@ class TestImageNatsAdapter:
         assert fp.is_absolute()
         assert fp.parent == (tmp_path / "nats_out").resolve()
         assert fp.name == "nats_abcdef12.png"
+        # Registry-cached engines stay warm between requests; the per-request
+        # contract is `clear_cache()` in `finally` (¬`cleanup()`, which would
+        # tear the engine down). Lock that down.
+        assert mock_engine.clear_cache.called, "clear_cache must run on the registry-warm path"
+        assert not mock_engine.cleanup.called, "cleanup must NOT run on the registry-warm path"
         assert fp.exists()

@@ -350,6 +350,13 @@ Before loading a model, `preflight_check()` reads current GPU and system memory 
 - **VRAM:** compares `torch.cuda.mem_get_info()` free VRAM against the engine's `vram_gb` requirement. If insufficient, it names the shortfall and suggests closing other GPU processes (e.g. `ollama`).
 - **System RAM:** reads `/proc/meminfo` and requires at least 4GB free. Override with `IMAGECLI_MIN_FREE_RAM_GB=8` if needed.
 
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IMAGECLI_MIN_FREE_RAM_GB` | `4.0` | Minimum free system RAM (GB) before `preflight_check` aborts a load. |
+| `IMAGECLI_NATS_OUTPUT_DIR` | `~/.roxabi/imagecli/nats_out` | Override directory used by the NATS satellite when delivering via `output_mode: "file"`. Useful for daemons whose CWD makes the config-file walk-up unreliable. |
+
 ### GPU memory cap
 
 `torch.cuda.set_per_process_memory_fraction(0.85)` caps imagecli's VRAM usage at 85% of total, leaving headroom for the OS and other processes.
@@ -385,6 +392,8 @@ src/imagecli/
 ```
 
 Output files never overwrite existing ones. If `image.png` already exists, the next run saves `image_1.png`, then `image_2.png`, and so on.
+
+> **Upgrading from an earlier checkout?** The default output directory moved from `images/images_out/` (in-repo) to `~/.roxabi/imagecli/out/` (under the project-wide data convention, Syncthing-replicated M₁↔M₂). Either copy any existing `images/images_out/` files over manually, or pin the old layout by setting `output_dir = "images/images_out/"` in your `imagecli.toml`.
 
 ## Contributing
 

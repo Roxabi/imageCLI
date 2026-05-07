@@ -54,5 +54,9 @@ def move_to_nats_output(tmp_path: Path, request_id: str, fmt: str) -> Path:
     final = out_dir / f"nats_{request_id[:8]}.{fmt}"
     if not final.resolve().is_relative_to(out_dir.resolve()):
         raise ValueError(f"path escape detected: {final}")
+    # `shutil.move` (not `os.rename`) so that crossing a mount boundary —
+    # tmp on `/tmp` (often tmpfs), final under `~/.roxabi/` (e.g. an HDD or
+    # Syncthing-watched volume) — falls back to copy-and-delete instead of
+    # raising EXDEV.
     shutil.move(tmp_path, final)
     return final.resolve()
