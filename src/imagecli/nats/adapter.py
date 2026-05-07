@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Any
 
 from roxabi_nats import NatsAdapterBase
 
+from imagecli.paths import move_to_nats_output
 from imagecli.nats.validators import _map_exception_to_error, _resolve_loras, _validate_request
 
 log = logging.getLogger(__name__)
@@ -21,22 +21,6 @@ log = logging.getLogger(__name__)
 SUBJECT = "lyra.image.generate.request"
 HEARTBEAT_SUBJECT = "lyra.image.heartbeat"
 SCHEMA_VERSION = "1"
-
-
-def _nats_output_dir() -> Path:
-    override = os.environ.get("IMAGECLI_NATS_OUTPUT_DIR")
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / ".roxabi" / "imagecli" / "nats_out"
-
-
-def _move_to_persistent_output(tmp_path: Path, request_id: str, fmt: str) -> Path:
-    """Move generated tmp file to the NATS output dir; return absolute resolved path."""
-    out_dir = _nats_output_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    final = out_dir / f"nats_{request_id[:8]}.{fmt}"
-    shutil.move(str(tmp_path), str(final))
-    return final.resolve()
 
 
 class ImageNatsAdapter(NatsAdapterBase):
@@ -176,7 +160,12 @@ class ImageNatsAdapter(NatsAdapterBase):
                 await self._reply_error(msg, request_id, error_code, error_detail)
                 return
 
-            # Read and encode image
+            # Read, encode, and deliver image.
+            # `final_path` tracks the persistent file once the tmp has been moved;
+            # `reply_sent` flips True only after the NATS reply is acknowledged so
+            # that an encode/send failure after the move can clean up the orphan.
+            final_path: Path | None = None
+            reply_sent = False
             try:
                 image_bytes = saved_path.read_bytes()
 
@@ -188,7 +177,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     "width": width,
                     "height": height,
                     "engine": engine_name,
-                    "seed_used": seed if seed else 0,
+                    "seed_used": seed if seed is not None else 0,
                 }
 
                 deliver_as_file = output_mode == "file"
@@ -203,12 +192,22 @@ class ImageNatsAdapter(NatsAdapterBase):
                         image_b64 = None
 
                 if deliver_as_file:
-                    final_path = _move_to_persistent_output(saved_path, request_id, fmt)
+                    try:
+                        final_path = move_to_nats_output(saved_path, request_id, fmt)
+                    except (OSError, shutil.Error, ValueError) as move_err:
+                        # Generation succeeded; persistence to nats_out failed.
+                        # Distinct from generation_failed so the hub can route it.
+                        log.exception(f"Failed to persist generated image: {move_err}")
+                        await self._reply_error(
+                            msg, request_id, "delivery_failed", "Failed to persist image"
+                        )
+                        return
                     reply = {**base_reply, "file_path": str(final_path)}
                 else:
                     reply = {**base_reply, "image_b64": image_b64}
 
                 await self.reply(msg, json.dumps(reply).encode())
+                reply_sent = True
 
             except Exception as e:
                 log.exception(f"Failed to encode response: {e}")
@@ -221,12 +220,20 @@ class ImageNatsAdapter(NatsAdapterBase):
                 else:
                     # Registry-cached engine stays warm between requests.
                     engine.clear_cache()
-                # Clean up temp file if it still exists
+                # Clean up tmp file (a successful move makes saved_path.exists() false).
                 try:
                     if saved_path.exists():
                         saved_path.unlink()
                 except OSError:
                     pass
+                # Clean up persistent file if the move succeeded but the reply
+                # didn't — otherwise nats_out/ would accumulate orphans on every
+                # encoder/transport failure after move.
+                if final_path is not None and not reply_sent:
+                    try:
+                        final_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     async def _reply_error(
         self, msg: Any, request_id: str, error: str, error_detail: str | None = None

@@ -343,3 +343,105 @@ class TestImageNatsAdapter:
         assert "image_b64" in reply
         assert reply["image_b64"] == _valid_image_b64()
         mock_engine.generate.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Path-traversal sanitization (request_id + format)
+    # ------------------------------------------------------------------
+    def test_adapter_rejects_request_id_with_path_separator(self) -> None:
+        """request_id with `/` is rejected before reaching the filesystem."""
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(request_id="a/../../b")
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is False
+        assert reply["error"] == "missing_required_field"
+        assert "request_id" in reply.get("error_detail", "")
+
+    def test_adapter_rejects_request_id_with_dots(self) -> None:
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(request_id="..")
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is False
+        assert reply["error"] == "missing_required_field"
+
+    def test_adapter_rejects_unknown_format(self) -> None:
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload()
+        payload["format"] = "png/../../etc"
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is False
+        assert reply["error"] == "missing_required_field"
+        assert "format" in reply.get("error_detail", "")
+
+    def test_adapter_accepts_allowed_formats(self) -> None:
+        """`png`, `jpeg`, `webp` are the contract-allowed formats."""
+        _require_imports()
+        from imagecli.nats.validators import ALLOWED_FORMATS, _validate_request
+
+        for fmt in ALLOWED_FORMATS:
+            payload = _valid_payload()
+            payload["format"] = fmt
+            valid, err = _validate_request(payload)
+            assert valid, f"format={fmt} unexpectedly rejected: {err}"
+
+    # ------------------------------------------------------------------
+    # b64-overflow → file fallback (regression guard for the
+    # filename-vs-absolute-path bug fixed in a620f4b)
+    # ------------------------------------------------------------------
+    def test_b64_overflow_falls_back_to_absolute_file_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _require_imports()
+        # Redirect nats_out into tmp_path so we don't touch ~/.roxabi/
+        monkeypatch.setenv("IMAGECLI_NATS_OUTPUT_DIR", str(tmp_path / "nats_out"))
+
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload(request_id="abcdef12")
+
+        # Mock engine that writes a >562 KB file (≈ 750 KB once base64-encoded).
+        big = b"\x89PNG\r\n\x1a\n" + b"\x00" * (700 * 1024)
+        mock_engine = MagicMock()
+        mock_engine.name = "flux2-klein"
+        mock_engine.vram_gb = 8.0
+
+        def _gen(_prompt, *, output_path, **_kw):
+            output_path.write_bytes(big)
+            return output_path
+
+        mock_engine.generate.side_effect = _gen
+        mock_engine.cleanup = MagicMock()
+        mock_engine.clear_cache = MagicMock()
+
+        # Stub out preflight + registry lookup; force our mock engine into the path.
+        with (
+            patch("imagecli.engine.preflight_check"),
+            patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
+        ):
+            asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is True, f"expected success, got {reply}"
+        # Overflow path: file_path present, image_b64 absent
+        assert "file_path" in reply
+        assert "image_b64" not in reply
+        # Regression guard: must be an absolute path, not a bare filename
+        fp = Path(reply["file_path"])
+        assert fp.is_absolute()
+        assert fp.parent == (tmp_path / "nats_out").resolve()
+        assert fp.name == "nats_abcdef12.png"
+        assert fp.exists()

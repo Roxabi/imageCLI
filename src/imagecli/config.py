@@ -6,6 +6,8 @@ import sys
 import warnings
 from pathlib import Path
 
+from imagecli.paths import CLI_OUTPUT_DIR
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -18,7 +20,7 @@ _DEFAULTS: dict = {
     "height": 1024,
     "steps": 50,
     "guidance": 4.0,
-    "output_dir": "~/.roxabi/imagecli/out",
+    "output_dir": CLI_OUTPUT_DIR,
     "format": "png",
     "quality": 95,
 }

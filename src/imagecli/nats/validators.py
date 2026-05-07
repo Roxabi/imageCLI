@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ __all__ = [
     "MAX_STEPS",
     "ALLOWED_LORA_DIRS",
     "ALLOWED_EMBEDDING_DIRS",
+    "ALLOWED_FORMATS",
+    "REQUEST_ID_PATTERN",
     "_validate_path",
     "_validate_request",
     "_resolve_loras",
@@ -19,6 +22,18 @@ __all__ = [
 # Bounds validation constants
 MAX_IMAGE_DIMENSION = 4096
 MAX_STEPS = 200
+
+# Filesystem-safe character class for request_id — `request_id[:8]` is used as a
+# filename component in nats_output_dir, so anything outside this set could
+# escape the output directory (e.g. `request_id="a/../../b"` slices to "a/../../"
+# which `pathlib` treats as real path separators). Aligns with the contract's
+# `Annotated[str, StringConstraints(min_length=1)]` while pinning charset.
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+# Allowlisted output formats — matches ImageRequest.format Literal in
+# roxabi_contracts.image.models. Same risk as request_id: fmt reaches the
+# filename in `nats_{id[:8]}.{fmt}`.
+ALLOWED_FORMATS = frozenset({"png", "jpeg", "webp"})
 
 # Allowlisted directories for LoRA and embedding paths
 # These are the standard ComfyUI model directories
@@ -70,6 +85,17 @@ def _validate_request(payload: dict) -> tuple[bool, str | None]:
         return False, "missing_required_field: prompt"
     if not payload.get("engine"):
         return False, "missing_required_field: engine"
+
+    # request_id reaches the filesystem via `nats_{request_id[:8]}.{fmt}` —
+    # path-traversal sink. Allowlist filesystem-safe chars.
+    request_id = payload.get("request_id", "")
+    if not REQUEST_ID_PATTERN.match(request_id):
+        return False, "request_id must match [A-Za-z0-9_-]{1,128}"
+
+    # format also reaches the filesystem (filename suffix + tempfile suffix).
+    fmt = payload.get("format")
+    if fmt is not None and fmt not in ALLOWED_FORMATS:
+        return False, f"format must be one of {sorted(ALLOWED_FORMATS)}: got {fmt!r}"
 
     # Bounds validation for dimensions
     width = payload.get("width")

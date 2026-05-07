@@ -231,6 +231,24 @@ Images exceeding NATS `max_payload` (e.g., 2048x2048 PNG ≈ 8–12 MB) cannot b
 
 The hub client selects `output_mode` based on expected image size and deployment topology.
 
+#### Syncthing-replication caveat (eventual consistency)
+
+When hub and satellite run on **different hosts** within the Syncthing mesh (M₁↔M₂), the absolute `file_path` returned in the reply does **not** imply the file is immediately readable on the hub. Syncthing's default scan/sync interval is 30–60 s — the hub may receive the reply before the file is replicated to its local view of `~/.roxabi/imagecli/nats_out/`.
+
+Hubs that consume `file_path` across hosts MUST therefore:
+
+1. Poll the path with bounded retry (e.g. probe every 500 ms, give up after 30 s) before treating the reply as actionable, OR
+2. Restrict `output_mode: "file"` to deployments where hub and satellite are co-located, OR
+3. Switch to a non-shared-FS delivery mechanism (NATS Object Store) — out of scope for this ADR; tracked as a future contract amendment.
+
+Co-located deployments (hub and satellite on the same host, today's default on M₁) are unaffected: `shutil.move` returns once the file is durably on disk and locally readable.
+
+#### Error codes (file-mode specifics)
+
+| Code | When |
+|---|---|
+| `delivery_failed` | Generation succeeded but persisting the image to `nats_out/` failed (`OSError`, `shutil.Error`, or path-escape `ValueError` raised by the defence-in-depth guard in `move_to_nats_output`). Distinct from `generation_failed` so the hub can differentiate retriable storage faults from non-retriable model failures. |
+
 ## Rationale
 
 **Why NATS.** Image generation is GPU-bound and cannot run in the hub venv. NATS request-reply decouples the hub from the GPU worker, enabling:
