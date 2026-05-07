@@ -16,7 +16,7 @@ imagecli generate face_prompt.md -e pulid-flux1-dev --no-compile # needs face_im
 
 ```bash
 for E in flux2-klein flux1-dev flux1-schnell sd35; do
-  imagecli batch images/prompts_in/ -e "$E" --output-dir images/images_out/benchmark/$E
+  imagecli batch images/prompts_in/ -e "$E" --output-dir ~/.roxabi/imagecli/out/benchmark/$E
 done
 ```
 

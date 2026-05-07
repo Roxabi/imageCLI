@@ -18,8 +18,11 @@ steps = 50
 # flux2-klein: 4.0  |  flux1-dev: 3.5  |  sd35: 1.0 (turbo, CFG-free)
 guidance = 4.0
 
-# Output directory (relative to CWD, or absolute)
-output_dir = "images/images_out"
+# Output directory — `~` expands to $HOME; relative paths resolve against CWD.
+# Default lives in ~/.roxabi/ to follow the project-wide data convention
+# (Code @ ~/projects/<tool>/, data @ ~/.roxabi/<tool>/) and ride the
+# Syncthing replication of ~/.roxabi/ between M₁↔M₂.
+output_dir = "~/.roxabi/imagecli/out"
 
 # Output image format: png | jpg | webp
 format = "png"

@@ -6,6 +6,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,22 @@ log = logging.getLogger(__name__)
 SUBJECT = "lyra.image.generate.request"
 HEARTBEAT_SUBJECT = "lyra.image.heartbeat"
 SCHEMA_VERSION = "1"
+
+
+def _nats_output_dir() -> Path:
+    override = os.environ.get("IMAGECLI_NATS_OUTPUT_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".roxabi" / "imagecli" / "nats_out"
+
+
+def _move_to_persistent_output(tmp_path: Path, request_id: str, fmt: str) -> Path:
+    """Move generated tmp file to the NATS output dir; return absolute resolved path."""
+    out_dir = _nats_output_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final = out_dir / f"nats_{request_id[:8]}.{fmt}"
+    shutil.move(str(tmp_path), str(final))
+    return final.resolve()
 
 
 class ImageNatsAdapter(NatsAdapterBase):
@@ -162,59 +180,33 @@ class ImageNatsAdapter(NatsAdapterBase):
             try:
                 image_bytes = saved_path.read_bytes()
 
-                if output_mode == "b64":
+                base_reply = {
+                    "contract_version": "1",
+                    "request_id": request_id,
+                    "ok": True,
+                    "mime_type": f"image/{fmt}",
+                    "width": width,
+                    "height": height,
+                    "engine": engine_name,
+                    "seed_used": seed if seed else 0,
+                }
+
+                deliver_as_file = output_mode == "file"
+                image_b64: str | None = None
+                if not deliver_as_file:
                     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                    # NATS server allows 50 MB but the contract caps base64
+                    # replies at ~750 KB; larger payloads downgrade to file
+                    # delivery on the shared FS / Syncthing-replicated dir.
+                    if len(image_b64) > 750_000:
+                        deliver_as_file = True
+                        image_b64 = None
 
-                    # Check if base64 exceeds reasonable NATS payload limit (~75% of 1MB)
-                    max_b64_size = 750_000  # ~750KB
-                    if len(image_b64) > max_b64_size:
-                        # Fall back to file mode - move to images_out
-                        output_dir = Path("images/images_out")
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        final_path = output_dir / f"nats_{request_id[:8]}.{fmt}"
-                        saved_path.rename(final_path)
-
-                        reply = {
-                            "contract_version": "1",
-                            "request_id": request_id,
-                            "ok": True,
-                            "file_path": final_path.name,
-                            "mime_type": f"image/{fmt}",
-                            "width": width,
-                            "height": height,
-                            "engine": engine_name,
-                            "seed_used": seed if seed else 0,  # Would need to extract from engine
-                        }
-                    else:
-                        reply = {
-                            "contract_version": "1",
-                            "request_id": request_id,
-                            "ok": True,
-                            "image_b64": image_b64,
-                            "mime_type": f"image/{fmt}",
-                            "width": width,
-                            "height": height,
-                            "engine": engine_name,
-                            "seed_used": seed if seed else 0,
-                        }
-                else:  # output_mode == "file"
-                    # Move to images_out
-                    output_dir = Path("images/images_out")
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    final_path = output_dir / f"nats_{request_id[:8]}.{fmt}"
-                    saved_path.rename(final_path)
-
-                    reply = {
-                        "contract_version": "1",
-                        "request_id": request_id,
-                        "ok": True,
-                        "file_path": str(final_path.resolve()),
-                        "mime_type": f"image/{fmt}",
-                        "width": width,
-                        "height": height,
-                        "engine": engine_name,
-                        "seed_used": seed if seed else 0,
-                    }
+                if deliver_as_file:
+                    final_path = _move_to_persistent_output(saved_path, request_id, fmt)
+                    reply = {**base_reply, "file_path": str(final_path)}
+                else:
+                    reply = {**base_reply, "image_b64": image_b64}
 
                 await self.reply(msg, json.dumps(reply).encode())
 

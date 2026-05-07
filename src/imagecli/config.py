@@ -18,7 +18,7 @@ _DEFAULTS: dict = {
     "height": 1024,
     "steps": 50,
     "guidance": 4.0,
-    "output_dir": "images/images_out",
+    "output_dir": "~/.roxabi/imagecli/out",
     "format": "png",
     "quality": 95,
 }

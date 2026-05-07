@@ -226,8 +226,8 @@ Images exceeding NATS `max_payload` (e.g., 2048x2048 PNG ≈ 8–12 MB) cannot b
 
 | `output_mode` | Behavior |
 |---|---|
-| `b64` (default) | Image returned as `image_b64` in reply. Fails with `generation_failed` if encoded size exceeds 75% of NATS `max_payload`. |
-| `file` | Image saved to `images/images_out/` on satellite. Reply contains `file_path` (absolute path). Hub retrieves via separate mechanism (e.g., HTTP fetch, shared volume, or rsync). |
+| `b64` (default) | Image returned as `image_b64` in reply. Auto-downgrades to `file` mode if base64 size exceeds the satellite's 750 KB ceiling. |
+| `file` | Image saved to `~/.roxabi/imagecli/nats_out/nats_{request_id[:8]}.{fmt}` on the satellite (overridable via `IMAGECLI_NATS_OUTPUT_DIR`). Reply contains `file_path` (absolute resolved path). Hub reads it directly: works when hub and worker share the path, either by host co-location or via Syncthing replication of `~/.roxabi/` (M₁↔M₂ today). |
 
 The hub client selects `output_mode` based on expected image size and deployment topology.
 

@@ -7,7 +7,8 @@ from pathlib import Path
 
 def resolve_output(cfg: dict, stem: str, fmt: str, output_dir: str | None) -> Path:
     """Resolve output path with anti-clobber suffixing (_1, _2, etc.)."""
-    out_dir = Path(output_dir or cfg.get("output_dir", "images/images_out"))
+    raw = output_dir or cfg.get("output_dir", "~/.roxabi/imagecli/out")
+    out_dir = Path(raw).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = fmt.lstrip(".")
     candidate = out_dir / f"{stem}.{ext}"

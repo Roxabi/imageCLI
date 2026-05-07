@@ -216,7 +216,7 @@ imagecli generate "prompt" --lora ./lora.safetensors --lora-scale 1.5  # boosted
 | `--seed` | | Fixed seed for reproducibility | random |
 | `--negative` | `-n` | Negative prompt | `""` |
 | `--output` | `-o` | Output file path | auto-generated |
-| `--output-dir` | | Output directory | `images/images_out` |
+| `--output-dir` | | Output directory (`~` expands to `$HOME`) | `~/.roxabi/imagecli/out` |
 | `--format` | | Output format: `png`, `jpg`, `webp` | `png` |
 | `--no-compile` | | Skip torch.compile (faster startup, slower generation) | off |
 | `--lora` | | Path to LoRA weights (`.safetensors`). `flux2-klein` and `flux2-klein-fp8` only. | none |
@@ -242,7 +242,7 @@ Processes every `.md` file in the directory in sorted order.
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
 | `--engine` | `-e` | Override engine for all files | per-file frontmatter |
-| `--output-dir` | | Output directory for all images | `images/images_out` |
+| `--output-dir` | | Output directory for all images (`~` expands) | `~/.roxabi/imagecli/out` |
 | `--no-compile` | | Skip torch.compile | off |
 | `--two-phase` | | Force 2-phase batch (lower VRAM, slower) | off |
 | `--lora` | | Path to LoRA weights (`.safetensors`). `flux2-klein` and `flux2-klein-fp8` only. | none |
@@ -308,7 +308,7 @@ width      = 1024                # output width in pixels
 height     = 1024                # output height in pixels
 steps      = 50                  # inference steps
 guidance   = 4.0                 # CFG scale
-output_dir = "images/images_out" # where to save generated images
+output_dir = "~/.roxabi/imagecli/out" # where to save generated images (`~` → $HOME)
 format     = "png"               # png | jpg | webp
 quality    = 95                  # JPEG/WebP quality (ignored for PNG)
 ```
@@ -364,7 +364,9 @@ Before loading a model, `preflight_check()` reads current GPU and system memory 
 imagecli.example.toml     — copy to ~/imagecli.toml and customize
 images/
   prompts_in/             — .md prompt files (tracked in git)
-  images_out/             — generated images (gitignored)
+                           — generated images live at ~/.roxabi/imagecli/out/ (CLI)
+                             and ~/.roxabi/imagecli/nats_out/ (NATS satellite),
+                             outside the repo and Syncthing-replicated M₁↔M₂
 src/imagecli/
   cli.py                  — Typer app: generate, batch, engines, info
   config.py               — TOML config loader (walks up from CWD to $HOME)

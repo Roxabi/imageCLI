@@ -9,7 +9,9 @@ dist/
 # Config (contains personal paths/preferences)
 imagecli.toml
 
-# Generated images
+# Generated images — default sink is now ~/.roxabi/imagecli/out/ (outside repo).
+# This entry stays as a safety net for users whose imagecli.toml still points
+# the output_dir at the legacy in-repo path.
 images/images_out/
 
 # Models cache (huge, managed by HuggingFace hub)

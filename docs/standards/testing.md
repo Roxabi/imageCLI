@@ -73,7 +73,7 @@ def test_resolve_output_appends_suffix_when_exists(tmp_path):
 ## Forbidden in CI Tests
 
 - Importing `diffusers`, `optimum`, or real engine classes that trigger `_load()`.
-- Writing to `images/images_out/` — use `tmp_path` (pytest fixture) for any file output.
+- Writing to the real output dir (`~/.roxabi/imagecli/out/` or `~/.roxabi/imagecli/nats_out/`) — use `tmp_path` (pytest fixture) for any file output.
 - Sleeping or polling for GPU readiness.
 - Network calls to HuggingFace or model downloads.
 - Any test that requires a CUDA GPU to pass.

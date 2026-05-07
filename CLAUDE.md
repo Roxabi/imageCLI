@@ -25,7 +25,7 @@ Python 3.12 via `uv` · Typer+Rich · PyTorch 2.11+ cu130 · ruff (L≤100, py31
 imagecli.example.toml     — copy → ~/imagecli.toml
 images/
   prompts_in/             — .md prompts (git-tracked)
-  images_out/             — generated (gitignored)
+                           — generated images go to ~/.roxabi/imagecli/{out,nats_out}/, ¬in repo
 src/imagecli/
   cli.py                  — Typer app: generate, batch, engines, info
   config.py               — TOML loader (walks CWD → $HOME)
@@ -133,4 +133,4 @@ Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
 
 - ¬over-engineering — thin flat CLI
 - Heavy imports (torch, diffusers) deferred to engine `_load()`
-- Output → `images/images_out/` default · prompts → `images/prompts_in/`
+- Output → `~/.roxabi/imagecli/out/` default (CLI), `~/.roxabi/imagecli/nats_out/` (NATS satellite); both Syncthing-replicated M₁↔M₂ · prompts → `images/prompts_in/` (git-tracked)

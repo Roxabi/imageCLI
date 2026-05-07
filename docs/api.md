@@ -14,7 +14,7 @@ from imagecli import generate, get_engine, list_engines
 from imagecli import generate
 
 path = generate("a white cat on a red chair")
-print(path)  # PosixPath('images/images_out/image.png')
+print(path)  # PosixPath('/home/<user>/.roxabi/imagecli/out/image.png')
 ```
 
 **With options:**
@@ -258,7 +258,7 @@ Hardcoded defaults are always present in the returned dict. Values from `imagecl
 | `height` | `int` | `1024` |
 | `steps` | `int` | `50` |
 | `guidance` | `float` | `4.0` |
-| `output_dir` | `str` | `"images/images_out"` |
+| `output_dir` | `str` | `"~/.roxabi/imagecli/out"` (expanded via `Path.expanduser()` at use time) |
 | `format` | `str` | `"png"` |
 | `quality` | `int` | `95` |
 | `_config_path` | `str` | Present only when a config file was found. Absolute path to the loaded file. |

@@ -69,6 +69,6 @@ Use this checklist when reviewing PRs that touch `src/imagecli/`.
 
 - [ ] New logic has corresponding tests in `tests/`.
 - [ ] Tests mock at infrastructure boundaries, not internal functions.
-- [ ] Tests use `tmp_path` for file output, not `images/images_out/`.
+- [ ] Tests use `tmp_path` for file output, not the real `~/.roxabi/imagecli/{out,nats_out}/` dirs.
 - [ ] No tests require a GPU or network access.
 - [ ] `uv run pytest` passes.

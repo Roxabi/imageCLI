@@ -21,7 +21,7 @@ Common flags:
 | `--seed N` | random | Reproducibility |
 | `-n "neg"` | — | Negative prompt |
 | `-o OUT` | auto | Custom output path |
-| `--output-dir DIR` | `images/images_out/` | Custom output directory |
+| `--output-dir DIR` | `~/.roxabi/imagecli/out/` | Custom output directory (`~` expands to `$HOME`) |
 | `--no-compile` | compile on | Skip `torch.compile` (faster startup) |
 | `--lora PATH` | — | LoRA weights (flux2-klein / -fp8) |
 | `--lora-scale F` | 1.0 | Adapter scale (try 1.5 for stronger identity) |

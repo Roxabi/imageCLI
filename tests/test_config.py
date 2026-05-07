@@ -38,7 +38,7 @@ def test_defaults():
     assert cfg["height"] == 1024
     assert cfg["steps"] == 50
     assert cfg["guidance"] == 4.0
-    assert cfg["output_dir"] == "images/images_out"
+    assert cfg["output_dir"] == "~/.roxabi/imagecli/out"
     assert cfg["format"] == "png"
     assert cfg["quality"] == 95
 
