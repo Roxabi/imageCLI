@@ -26,3 +26,5 @@ images/images_out/
 .pytest_cache/
 
 .env
+# CocoIndex Code (ccc)
+/.cocoindex_code/
