@@ -9,6 +9,7 @@ register:
 	@$(HUB_GEN_MK) imagecli "$(abspath .)" gen comfyui
 	$(call hub-link-conf,imagecli_gen,supervisor/conf.d/imagecli_gen.conf)
 	@mkdir -p "$(HOME)/.local/state/imagecli/logs"
+	@mkdir -p "$(HOME)/.cache/huggingface" "$(HOME)/.roxabi/imagecli"
 	$(hub_reread)
 	@echo "Done. Run 'make gen' to start the generation daemon."
 
