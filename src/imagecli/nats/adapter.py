@@ -27,6 +27,12 @@ SCHEMA_VERSION = "1"
 # Map legacy free-text error codes (kept for backward compat in `error: str`)
 # to structured WorkerError fields. `default_retryable` follows KNOWN_CODES
 # in roxabi_contracts.errors. Unmapped codes fall back to worker.internal.
+#
+# `delivery_failed` covers an OSError moving the generated file into
+# nats_out/ — generation succeeded but persistence failed. There is no
+# `image.delivery_failed` in KNOWN_CODES yet (request upstream), so we use
+# `worker.internal` per its docstring: "not covered by a more specific code."
+# Hub routing on `retryable=True` works identically to `worker.crash`.
 _WORKER_ERROR_MAP: dict[str, tuple[str, bool]] = {
     "missing_required_field": ("worker.validation", False),
     "unknown_engine": ("worker.validation", False),
