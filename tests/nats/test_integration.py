@@ -191,7 +191,7 @@ async def test_adapter_handles_missing_prompt(adapter, mock_nc):
     response = msg.last_reply()
     assert response["ok"] is False
     assert response["error"] == "missing_required_field"
-    assert "prompt" in response.get("error_detail", "")
+    assert "prompt" in ((response.get("worker_error") or {}).get("detail") or "")
     assert response["request_id"] == "test-req-missing-prompt"
 
 
@@ -215,7 +215,7 @@ async def test_adapter_handles_missing_engine(adapter, mock_nc):
     response = msg.last_reply()
     assert response["ok"] is False
     assert response["error"] == "missing_required_field"
-    assert "engine" in response.get("error_detail", "")
+    assert "engine" in ((response.get("worker_error") or {}).get("detail") or "")
 
 
 @pytest.mark.asyncio

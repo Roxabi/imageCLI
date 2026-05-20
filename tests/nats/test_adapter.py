@@ -128,7 +128,7 @@ class TestImageNatsAdapter:
         reply = msg.last_reply()
         assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "prompt" in reply.get("error_detail", "")
+        assert "prompt" in ((reply.get("worker_error") or {}).get("detail") or "")
 
     # ------------------------------------------------------------------
     # Case 2: missing engine
@@ -149,7 +149,7 @@ class TestImageNatsAdapter:
         reply = msg.last_reply()
         assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "engine" in reply.get("error_detail", "")
+        assert "engine" in ((reply.get("worker_error") or {}).get("detail") or "")
 
     # ------------------------------------------------------------------
     # Case 3: unknown engine
@@ -305,9 +305,9 @@ class TestImageNatsAdapter:
         assert reply["error"] in ("invalid_request", "missing_required_field")
         assert reply["error"] != "generation_failed"
         assert (
-            "loras" in reply.get("error_detail", "").lower()
-            or "mixed" in reply.get("error_detail", "").lower()
-            or "singular" in reply.get("error_detail", "").lower()
+            "loras" in ((reply.get("worker_error") or {}).get("detail") or "").lower()
+            or "mixed" in ((reply.get("worker_error") or {}).get("detail") or "").lower()
+            or "singular" in ((reply.get("worker_error") or {}).get("detail") or "").lower()
         )
 
     @pytest.mark.xfail(reason="Adapter needs generation logic in handle() - ADR-046")
@@ -359,7 +359,7 @@ class TestImageNatsAdapter:
         reply = msg.last_reply()
         assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "request_id" in reply.get("error_detail", "")
+        assert "request_id" in ((reply.get("worker_error") or {}).get("detail") or "")
 
     def test_adapter_rejects_request_id_with_dots(self) -> None:
         _require_imports()
@@ -385,7 +385,7 @@ class TestImageNatsAdapter:
         reply = msg.last_reply()
         assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "format" in reply.get("error_detail", "")
+        assert "format" in ((reply.get("worker_error") or {}).get("detail") or "")
 
     def test_adapter_accepts_allowed_formats(self) -> None:
         """`png`, `jpeg`, `webp` are the contract-allowed formats."""
