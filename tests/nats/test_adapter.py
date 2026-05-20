@@ -101,6 +101,34 @@ def _make_adapter(**kwargs):  # type: ignore[return]
     return adapter
 
 
+def _assert_worker_error(
+    reply: dict,
+    *,
+    code: str,
+    retryable: bool,
+    detail_contains: str | None = None,
+) -> None:
+    """Assert the reply carries a structured WorkerError with the expected shape.
+
+    The legacy ``or {}`` fallback (used in tests prior to the WorkerError
+    migration) passes vacuously when ``worker_error`` is absent; this helper
+    requires the field to exist before drilling into ``code``/``retryable``/
+    ``detail``.
+    """
+    assert reply["ok"] is False, f"expected ok=False, got {reply!r}"
+    we = reply.get("worker_error")
+    assert we is not None, f"worker_error missing from reply: {reply!r}"
+    assert we.get("code") == code, f"expected code={code!r}, got {we.get('code')!r}"
+    assert we.get("retryable") is retryable, (
+        f"expected retryable={retryable}, got {we.get('retryable')!r}"
+    )
+    if detail_contains is not None:
+        detail = we.get("detail") or ""
+        assert detail_contains in detail, (
+            f"expected detail containing {detail_contains!r}, got {detail!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -126,9 +154,10 @@ class TestImageNatsAdapter:
 
         # Assert
         reply = msg.last_reply()
-        assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "prompt" in reply.get("error_detail", "")
+        _assert_worker_error(
+            reply, code="worker.validation", retryable=False, detail_contains="prompt"
+        )
 
     # ------------------------------------------------------------------
     # Case 2: missing engine
@@ -147,9 +176,10 @@ class TestImageNatsAdapter:
 
         # Assert
         reply = msg.last_reply()
-        assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "engine" in reply.get("error_detail", "")
+        _assert_worker_error(
+            reply, code="worker.validation", retryable=False, detail_contains="engine"
+        )
 
     # ------------------------------------------------------------------
     # Case 3: unknown engine
@@ -298,16 +328,15 @@ class TestImageNatsAdapter:
             asyncio.run(adapter.handle(msg, payload))
 
         reply = msg.last_reply()
-        assert reply["ok"] is False
         # Must surface as a validation error — not as generation_failed,
         # which would indicate the mixed-form payload slipped past
         # _validate_request and into the generation loop.
         assert reply["error"] in ("invalid_request", "missing_required_field")
         assert reply["error"] != "generation_failed"
-        assert (
-            "loras" in reply.get("error_detail", "").lower()
-            or "mixed" in reply.get("error_detail", "").lower()
-            or "singular" in reply.get("error_detail", "").lower()
+        _assert_worker_error(reply, code="worker.validation", retryable=False)
+        detail = ((reply.get("worker_error") or {}).get("detail") or "").lower()
+        assert "loras" in detail or "mixed" in detail or "singular" in detail, (
+            f"expected detail to mention loras/mixed/singular, got {detail!r}"
         )
 
     @pytest.mark.xfail(reason="Adapter needs generation logic in handle() - ADR-046")
@@ -357,9 +386,10 @@ class TestImageNatsAdapter:
         asyncio.run(adapter.handle(msg, payload))
 
         reply = msg.last_reply()
-        assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "request_id" in reply.get("error_detail", "")
+        _assert_worker_error(
+            reply, code="worker.validation", retryable=False, detail_contains="request_id"
+        )
 
     def test_adapter_rejects_request_id_with_dots(self) -> None:
         _require_imports()
@@ -383,9 +413,56 @@ class TestImageNatsAdapter:
         asyncio.run(adapter.handle(msg, payload))
 
         reply = msg.last_reply()
-        assert reply["ok"] is False
         assert reply["error"] == "missing_required_field"
-        assert "format" in reply.get("error_detail", "")
+        _assert_worker_error(
+            reply, code="worker.validation", retryable=False, detail_contains="format"
+        )
+
+    # ------------------------------------------------------------------
+    # trace_id propagation + fallback
+    # ------------------------------------------------------------------
+    def test_adapter_forwards_explicit_trace_id(self) -> None:
+        """Inbound trace_id distinct from request_id is preserved on the reply."""
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        # Force an error path (missing prompt) to capture the reply envelope.
+        payload = _valid_payload()
+        payload["trace_id"] = "trace-abc-123"
+        del payload["prompt"]
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["trace_id"] == "trace-abc-123"
+        assert reply["request_id"] == "req-001"
+
+    def test_adapter_trace_id_falls_back_to_unknown(self) -> None:
+        """When trace_id AND request_id are absent/empty, reply trace_id is 'unknown'.
+
+        Exercises the ``model_construct`` branch in ``_reply_error`` — the only
+        path reachable when request_id is empty (ImageResponse.request_id is
+        min_length=1, so the validated constructor would refuse it).
+        """
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        # _validate_request rejects empty request_id (REQUEST_ID_PATTERN), which
+        # routes through _reply_error before request_id is replaced — but the
+        # adapter's trace_id derivation runs first, so trace_id falls back to
+        # "unknown" (payload has neither trace_id nor a usable request_id).
+        payload = _valid_payload(request_id="")
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["trace_id"] == "unknown"
+        # The model_construct branch leaves request_id="" — the reply still
+        # serializes (validation skipped) and carries the structured error.
+        assert reply["ok"] is False
+        we = reply.get("worker_error")
+        assert we is not None
+        assert we["code"] == "worker.validation"
 
     def test_adapter_accepts_allowed_formats(self) -> None:
         """`png`, `jpeg`, `webp` are the contract-allowed formats."""

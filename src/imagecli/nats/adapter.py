@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import shutil
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from roxabi_contracts.errors import WorkerError
+from roxabi_contracts.image import ImageResponse
 from roxabi_nats import NatsAdapterBase
 
 from imagecli.paths import move_to_nats_output
@@ -21,6 +23,30 @@ log = logging.getLogger(__name__)
 SUBJECT = "lyra.image.generate.request"
 HEARTBEAT_SUBJECT = "lyra.image.heartbeat"
 SCHEMA_VERSION = "1"
+
+# Map legacy free-text error codes (kept for backward compat in `error: str`)
+# to structured WorkerError fields. `default_retryable` follows KNOWN_CODES
+# in roxabi_contracts.errors. Unmapped codes fall back to worker.internal.
+#
+# `delivery_failed` covers an OSError moving the generated file into
+# nats_out/ — generation succeeded but persistence failed. There is no
+# `image.delivery_failed` in KNOWN_CODES yet (request upstream), so we use
+# `worker.internal` per its docstring: "not covered by a more specific code."
+# Hub routing on `retryable=True` works identically to `worker.crash`.
+_WORKER_ERROR_MAP: dict[str, tuple[str, bool]] = {
+    "missing_required_field": ("worker.validation", False),
+    "unknown_engine": ("worker.validation", False),
+    "engine_load_failed": ("image.engine_unavailable", True),
+    "insufficient_resources": ("worker.capacity", True),
+    "generation_failed": ("worker.crash", True),
+    "delivery_failed": ("worker.internal", True),
+}
+
+
+def _make_worker_error(code: str, detail: str | None = None) -> WorkerError:
+    """Build a structured WorkerError from a legacy free-text error code."""
+    canonical, retryable = _WORKER_ERROR_MAP.get(code, ("worker.internal", True))
+    return WorkerError(code=canonical, message=code, retryable=retryable, detail=detail)
 
 
 class ImageNatsAdapter(NatsAdapterBase):
@@ -46,6 +72,8 @@ class ImageNatsAdapter(NatsAdapterBase):
             heartbeat_subject=HEARTBEAT_SUBJECT,
             heartbeat_interval=heartbeat_interval,
             drain_timeout=drain_timeout,
+            inbox_prefix="_inbox.imagecli-image",
+            wait_ready=False,  # worker semantics — see NatsAdapterBase docstring
         )
         self.default_engine = default_engine
         self.max_concurrent = max_concurrent
@@ -56,13 +84,19 @@ class ImageNatsAdapter(NatsAdapterBase):
     async def handle(self, msg: Any, payload: dict) -> None:
         """Process an image generation request per ADR-046 contract."""
         request_id = payload.get("request_id", "")
+        # trace_id is required min_length=1 on the response envelope; fall back
+        # to request_id (then "unknown") so error paths can still produce a
+        # valid ImageResponse when the client omits it.
+        trace_id = payload.get("trace_id") or request_id or "unknown"
 
         # Acquire semaphore for concurrency control
         async with self._sem:
             # Validate required fields and bounds
             valid, error = _validate_request(payload)
             if not valid:
-                await self._reply_error(msg, request_id, "missing_required_field", error)
+                await self._reply_error(
+                    msg, trace_id, request_id, "missing_required_field", error
+                )
                 return
 
             engine_name = payload["engine"]
@@ -72,13 +106,15 @@ class ImageNatsAdapter(NatsAdapterBase):
             try:
                 from imagecli.engine import get_engine, preflight_check, list_engines
             except ImportError as e:
-                await self._reply_error(msg, request_id, "engine_load_failed", f"Import error: {e}")
+                await self._reply_error(
+                    msg, trace_id, request_id, "engine_load_failed", f"Import error: {e}"
+                )
                 return
 
             # Validate engine name against registry
             engine_names = {e["name"] for e in list_engines()}
             if engine_name not in engine_names:
-                await self._reply_error(msg, request_id, "unknown_engine", engine_name)
+                await self._reply_error(msg, trace_id, request_id, "unknown_engine", engine_name)
                 return
 
             # Get or create engine instance.
@@ -103,7 +139,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                 self._engine_loaded = engine_name
             except Exception as e:
                 error_code, error_detail = _map_exception_to_error(e)
-                await self._reply_error(msg, request_id, error_code, error_detail)
+                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
                 return
 
             # Preflight check (VRAM/RAM validation)
@@ -111,7 +147,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                 preflight_check(engine)
             except Exception as e:
                 error_code, error_detail = _map_exception_to_error(e)
-                await self._reply_error(msg, request_id, error_code, error_detail)
+                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
                 return
 
             # Extract generation params with defaults
@@ -157,7 +193,7 @@ class ImageNatsAdapter(NatsAdapterBase):
 
                     # Evict so the registry can reload cleanly next request.
                     model_registry.evict(engine_name)
-                await self._reply_error(msg, request_id, error_code, error_detail)
+                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
                 return
 
             # Read, encode, and deliver image.
@@ -169,19 +205,9 @@ class ImageNatsAdapter(NatsAdapterBase):
             try:
                 image_bytes = saved_path.read_bytes()
 
-                base_reply = {
-                    "contract_version": "1",
-                    "request_id": request_id,
-                    "ok": True,
-                    "mime_type": f"image/{fmt}",
-                    "width": width,
-                    "height": height,
-                    "engine": engine_name,
-                    "seed_used": seed if seed is not None else 0,
-                }
-
                 deliver_as_file = output_mode == "file"
                 image_b64: str | None = None
+                file_path_str: str | None = None
                 if not deliver_as_file:
                     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
                     # NATS server allows 50 MB but the contract caps base64
@@ -199,20 +225,40 @@ class ImageNatsAdapter(NatsAdapterBase):
                         # Distinct from generation_failed so the hub can route it.
                         log.exception(f"Failed to persist generated image: {move_err}")
                         await self._reply_error(
-                            msg, request_id, "delivery_failed", "Failed to persist image"
+                            msg,
+                            trace_id,
+                            request_id,
+                            "delivery_failed",
+                            "Failed to persist image",
                         )
                         return
-                    reply = {**base_reply, "file_path": str(final_path)}
-                else:
-                    reply = {**base_reply, "image_b64": image_b64}
+                    file_path_str = str(final_path)
 
-                await self.reply(msg, json.dumps(reply).encode())
+                resp = ImageResponse(
+                    contract_version="1",
+                    trace_id=trace_id,
+                    issued_at=datetime.now(timezone.utc),
+                    request_id=request_id,
+                    ok=True,
+                    image_b64=image_b64,
+                    file_path=file_path_str,
+                    mime_type=f"image/{fmt}",
+                    width=width,
+                    height=height,
+                    engine=engine_name,
+                    seed_used=seed if seed is not None else 0,
+                )
+                await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
                 reply_sent = True
 
             except Exception as e:
                 log.exception(f"Failed to encode response: {e}")
                 await self._reply_error(
-                    msg, request_id, "generation_failed", "Failed to encode response"
+                    msg,
+                    trace_id,
+                    request_id,
+                    "generation_failed",
+                    "Failed to encode response",
                 )
             finally:
                 if uses_per_request_cfg:
@@ -236,18 +282,48 @@ class ImageNatsAdapter(NatsAdapterBase):
                         pass
 
     async def _reply_error(
-        self, msg: Any, request_id: str, error: str, error_detail: str | None = None
+        self,
+        msg: Any,
+        trace_id: str,
+        request_id: str,
+        error: str,
+        error_detail: str | None = None,
     ) -> None:
-        """Send an error reply following ADR-046 contract."""
-        reply = {
-            "contract_version": "1",
-            "request_id": request_id,
-            "ok": False,
-            "error": error,
-        }
-        if error_detail:
-            reply["error_detail"] = error_detail
-        await self.reply(msg, json.dumps(reply).encode())
+        """Send an error reply per the v0.4.x ImageResponse contract.
+
+        Populates both the legacy free-text ``error: str`` field (for back-compat
+        with consumers that read it directly) and the structured ``worker_error:
+        WorkerError`` field (for v0.4.x consumers that route on canonical codes
+        + retryability).
+        """
+        worker_err = _make_worker_error(error, error_detail)
+        # ImageResponse.request_id is min_length=1; some failure paths reach here
+        # before request_id is known (e.g. malformed envelope). Use
+        # model_construct to skip validation in that single edge case — mirrors
+        # the voiceCLI _err_tts pattern.
+        safe_trace = trace_id or "unknown"
+        now = datetime.now(timezone.utc)
+        if request_id:
+            resp = ImageResponse(
+                contract_version="1",
+                trace_id=safe_trace,
+                issued_at=now,
+                request_id=request_id,
+                ok=False,
+                error=error,
+                worker_error=worker_err,
+            )
+        else:
+            resp = ImageResponse.model_construct(
+                contract_version="1",
+                trace_id=safe_trace,
+                issued_at=now,
+                request_id="",
+                ok=False,
+                error=error,
+                worker_error=worker_err,
+            )
+        await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
     def heartbeat_payload(self) -> dict:
         """Extend base heartbeat per lyra.image contract (see roxabi_contracts.image.models.Heartbeat)."""
