@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+# imageCLI generation worker — NATS satellite serving lyra.image.generate.request.
+#
+# Base layout mirrors roxabi-ml-base but builds standalone because ml-base is
+# pinned to torch 2.7.1+cu128 and imageCLI requires torch>=2.11 + cu130
+# (FLUX.2-klein FP8 on Blackwell sm_120 / RTX 5070 Ti). When ml-base ships a
+# cu130 tag this Dockerfile can collapse onto FROM ghcr.io/roxabi/ml-base.
+
+# ── build stage (devel image carries nvcc — needed only if extras compile) ──
+FROM docker.io/nvidia/cuda:13.2.1-cudnn-devel-ubuntu24.04 AS builder
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /usr/local/bin/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3-dev \
+        gcc g++ \
+        git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN uv venv --python python3.12 /app/.venv
+
+# Layer-cache: deps before src — code edits don't bust the wheel layer.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Source + project install.
+COPY src/ ./src/
+RUN uv sync --frozen --no-dev
+
+# ── runtime stage (slim — no nvcc, no apt build chain) ────────────────────────
+FROM docker.io/nvidia/cuda:13.2.1-cudnn-runtime-ubuntu24.04 AS runtime
+
+LABEL org.opencontainers.image.source="https://github.com/Roxabi/imageCLI" \
+      org.opencontainers.image.description="imageCLI NATS satellite — FLUX/SD3.5 on cu130" \
+      org.opencontainers.image.licenses="MIT"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Fixed UID/GID 1503 — distinct from lyra=1500, voicecli=1501, llmcli=1502.
+RUN groupadd -r -g 1503 imagecli && \
+    useradd -r -u 1503 -g imagecli -m -d /home/imagecli -s /bin/bash imagecli
+
+COPY --from=builder --chown=imagecli:imagecli /app /app
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv" \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+USER imagecli
+
+# Single satellite mode — engine is overridable via the IMAGECLI_ENGINE env so
+# the quadlet can pin a different default without rebuilding the image.
+CMD ["sh", "-c", "exec imagecli nats-serve image --engine \"${IMAGECLI_ENGINE:-flux2-klein}\""]

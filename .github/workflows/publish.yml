@@ -1,0 +1,15 @@
+name: publish
+on:
+  push:
+    branches: [staging]
+    tags: ['imagecli/v*']
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish-gen:
+    uses: Roxabi/.github/.github/workflows/publish-container.yml@v1
+    with:
+      image_name: ghcr.io/roxabi/imagecli-gen
+      dockerfile_path: Dockerfile.gen
+      release_please_component: imagecli
