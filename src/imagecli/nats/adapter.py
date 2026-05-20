@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 SUBJECT = "lyra.image.generate.request"
 HEARTBEAT_SUBJECT = "lyra.image.heartbeat"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = 1
 
 # Map legacy free-text error codes (kept for backward compat in `error: str`)
 # to structured WorkerError fields. `default_retryable` follows KNOWN_CODES

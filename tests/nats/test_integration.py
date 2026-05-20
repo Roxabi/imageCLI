@@ -98,7 +98,7 @@ async def test_adapter_handles_request_end_to_end(adapter, mock_engine, mock_nc,
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-123",
         "prompt": "a white cat on a red chair",
         "engine": "flux2-klein",
@@ -177,7 +177,7 @@ async def test_adapter_handles_missing_prompt(adapter, mock_nc):
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-missing-prompt",
         "engine": "flux2-klein",
         # No prompt field
@@ -204,7 +204,7 @@ async def test_adapter_handles_missing_engine(adapter, mock_nc):
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-missing-engine",
         "prompt": "test prompt",
         # No engine field
@@ -231,7 +231,7 @@ async def test_adapter_handles_unknown_engine(adapter, mock_nc):
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-bad-engine",
         "prompt": "test prompt",
         "engine": "nonexistent-engine",
@@ -257,7 +257,7 @@ async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
 
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-preflight-fail",
         "prompt": "test prompt",
         "engine": "flux2-klein",
@@ -288,7 +288,7 @@ async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc)
 
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-gen-fail",
         "prompt": "test prompt",
         "engine": "flux2-klein",
@@ -315,7 +315,7 @@ async def test_adapter_uses_default_engine(adapter, mock_engine, mock_nc, tmp_pa
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-default-engine",
         "prompt": "test prompt",
         # No engine specified - should use default
@@ -359,7 +359,7 @@ async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_pa
     # Arrange
     request_payload = {
         "contract_version": CONTRACT_VERSION,
-        "schema_version": "1",
+        "schema_version": 1,
         "request_id": "test-req-lora",
         "prompt": "test prompt",
         "engine": "flux2-klein",
