@@ -16,10 +16,9 @@ Network=roxabi.network
 Volume=%h/.cache/huggingface:/home/imagecli/.cache/huggingface
 # Explicit HF_HOME guards against XDG_CACHE_HOME quirks inside the container.
 Environment=HF_HOME=/home/imagecli/.cache/huggingface
-# Generated PNGs (nats_out/) — named volume keeps Syncthing-replicated outputs
-# off the read-only container fs. Hub mounts the same volume read-only when
-# delivering by file_path (output_mode=file path of the v0.4.x ImageResponse).
-Volume=imagecli-out:/home/imagecli/.roxabi/imagecli
+# PNG outputs (out/, nats_out/) — bind-mount so files land in ~/.roxabi/imagecli/
+# on the host, Syncthing-replicated M1<->M2 per project convention.
+Volume=%h/.roxabi/imagecli:/home/imagecli/.roxabi/imagecli
 Secret=imagecli-nats,type=mount,target=/home/imagecli/.config/imagecli/nkeys/seed.seed,mode=0400,uid=1503,gid=1503
 AddDevice=nvidia.com/gpu=all
 # UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
