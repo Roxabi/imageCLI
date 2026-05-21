@@ -24,6 +24,7 @@ images/images_out/
 # Dev
 .ruff_cache/
 .pytest_cache/
+.coverage
 
 .env
 # CocoIndex Code (ccc)
