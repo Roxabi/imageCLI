@@ -25,6 +25,8 @@ _DEFAULTS: dict = {
     "quality": 95,
 }
 
+_DEFAULT_WEIGHTS_DIR = Path.home() / ".roxabi" / "imagecli" / "weights"
+
 
 def _find_config() -> Path | None:
     cwd = Path.cwd().resolve()
@@ -55,3 +57,22 @@ def load_config() -> dict:
     cfg.update(raw.get("defaults", {}))
     cfg["_config_path"] = str(path)
     return cfg
+
+
+def get_weights_dir() -> Path:
+    """Return the weights directory from config [paths] section, expanding ~.
+
+    Falls back to ~/.roxabi/imagecli/weights/ if not configured or no config file.
+    Priority: CLI flag (N/A for paths) > TOML [paths].weights_dir > default.
+    """
+    config_path = _find_config()
+    if config_path is None:
+        return _DEFAULT_WEIGHTS_DIR
+
+    with config_path.open("rb") as f:
+        raw = tomllib.load(f)
+
+    weights_str = raw.get("paths", {}).get("weights_dir")
+    if weights_str:
+        return Path(weights_str).expanduser()
+    return _DEFAULT_WEIGHTS_DIR

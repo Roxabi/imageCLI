@@ -18,14 +18,26 @@ from typing import Any, Callable, cast
 
 import torch
 
+from imagecli.config import get_weights_dir
 from imagecli.engine import EngineCapabilities, ImageEngine
 from imagecli.engines._pulid import PuLIDFlux2, extract_id_tokens, patch_flux2
 
 logger = logging.getLogger(__name__)
 
-_PULID_DIR = Path.home() / "ComfyUI/models/pulid"
-_INSIGHTFACE_DIR = Path.home() / "ComfyUI/models/insightface"
-_PULID_DEFAULT = _PULID_DIR / "pulid_flux2_klein_v2.safetensors"
+
+def _get_pulid_dir() -> Path:
+    """Return PuLID weights directory, resolved from config at call time."""
+    return get_weights_dir() / "pulid"
+
+
+def _get_insightface_dir() -> Path:
+    """Return InsightFace model directory, resolved from config at call time."""
+    return get_weights_dir() / "insightface"
+
+
+def _get_pulid_default() -> Path:
+    """Return default PuLID Klein safetensors path."""
+    return _get_pulid_dir() / "pulid_flux2_klein_v2.safetensors"
 
 
 class PuLIDFlux2KleinEngine(ImageEngine):
@@ -76,8 +88,10 @@ class PuLIDFlux2KleinEngine(ImageEngine):
         )
         self._finalize_load(self._pipe)
 
-        logger.info("Loading PuLID model from %s…", _PULID_DEFAULT)
-        self._pulid = PuLIDFlux2.from_safetensors(_PULID_DEFAULT)
+        pulid_default = _get_pulid_default()
+        insightface_dir = _get_insightface_dir()
+        logger.info("Loading PuLID model from %s…", pulid_default)
+        self._pulid = PuLIDFlux2.from_safetensors(pulid_default)
         self._pulid.eval().to("cuda", dtype=torch.bfloat16)
 
         logger.info("Loading InsightFace (AntelopeV2)…")
@@ -85,7 +99,7 @@ class PuLIDFlux2KleinEngine(ImageEngine):
 
         self._insightface = FaceAnalysis(
             name="antelopev2",
-            root=str(_INSIGHTFACE_DIR),
+            root=str(insightface_dir),
             providers=["CUDAExecutionProvider"],
         )
         self._insightface.prepare(ctx_id=0, det_size=(640, 640))  # type: ignore[union-attr]

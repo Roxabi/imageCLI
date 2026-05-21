@@ -25,13 +25,22 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from imagecli.config import get_weights_dir
 from imagecli.engine import EngineCapabilities, ImageEngine
 from imagecli.engines._pulid import PuLIDFlux1, patch_flux1
 
 logger = logging.getLogger(__name__)
 
-_PULID_WEIGHTS = Path.home() / "ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors"
-_INSIGHTFACE_DIR = Path.home() / "ComfyUI/models/insightface"
+
+def _get_pulid_weights() -> Path:
+    """Return FLUX.1-dev PuLID safetensors path, resolved from config at call time."""
+    return get_weights_dir() / "pulid" / "pulid_flux_v0.9.1.safetensors"
+
+
+def _get_insightface_dir() -> Path:
+    """Return InsightFace model directory, resolved from config at call time."""
+    return get_weights_dir() / "insightface"
+
 
 # EVA-CLIP intermediate block indices (5 evenly-spaced layers across 24 ViT blocks)
 _EVA_INTERMEDIATE_INDICES = [4, 8, 12, 16, 20]
@@ -81,8 +90,10 @@ class PuLIDFlux1DevEngine(ImageEngine):
         self._pipe.enable_model_cpu_offload()
         self._optimize_pipe(self._pipe)
 
-        logger.info("Loading PuLID weights from %s…", _PULID_WEIGHTS)
-        self._pulid = PuLIDFlux1.from_safetensors(_PULID_WEIGHTS)
+        pulid_weights = _get_pulid_weights()
+        insightface_dir = _get_insightface_dir()
+        logger.info("Loading PuLID weights from %s…", pulid_weights)
+        self._pulid = PuLIDFlux1.from_safetensors(pulid_weights)
         self._pulid.eval().to("cuda", dtype=torch.bfloat16)
 
         logger.info("Loading InsightFace (AntelopeV2)…")
@@ -90,7 +101,7 @@ class PuLIDFlux1DevEngine(ImageEngine):
 
         self._insightface = FaceAnalysis(
             name="antelopev2",
-            root=str(_INSIGHTFACE_DIR),
+            root=str(insightface_dir),
             providers=["CUDAExecutionProvider"],
         )
         self._insightface.prepare(ctx_id=0, det_size=(640, 640))  # type: ignore[union-attr]

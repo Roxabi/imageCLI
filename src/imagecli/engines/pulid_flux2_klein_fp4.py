@@ -25,7 +25,7 @@ from typing import Callable, cast
 
 from imagecli.engine import EngineCapabilities, ImageEngine
 from imagecli.engines._pulid import PuLIDFlux2, extract_id_tokens, patch_flux2
-from imagecli.engines.pulid_flux2_klein import _INSIGHTFACE_DIR, _PULID_DEFAULT
+from imagecli.engines.pulid_flux2_klein import _get_insightface_dir, _get_pulid_default
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,10 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
         self._optimize_pipe(self._pipe, compile=False)
 
         # PuLID model — same weights and path as pulid-flux2-klein
-        logger.info("Loading PuLID model from %s…", _PULID_DEFAULT)
-        self._pulid = PuLIDFlux2.from_safetensors(_PULID_DEFAULT)
+        pulid_default = _get_pulid_default()
+        insightface_dir = _get_insightface_dir()
+        logger.info("Loading PuLID model from %s…", pulid_default)
+        self._pulid = PuLIDFlux2.from_safetensors(pulid_default)
         self._pulid.eval().to("cuda", dtype=torch.bfloat16)
 
         logger.info("Loading InsightFace (AntelopeV2)…")
@@ -152,7 +154,7 @@ class PuLIDFlux2KleinFP4Engine(ImageEngine):
 
         self._insightface = FaceAnalysis(
             name="antelopev2",
-            root=str(_INSIGHTFACE_DIR),
+            root=str(insightface_dir),
             providers=["CUDAExecutionProvider"],
         )
         self._insightface.prepare(ctx_id=0, det_size=(640, 640))  # type: ignore[union-attr]
