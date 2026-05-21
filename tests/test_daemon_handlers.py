@@ -64,10 +64,51 @@ def test_blend_truncates_long_error(captured, monkeypatch, tmp_path):
         {"inputs": [{"path": "x.pt", "weight": 1.0}], "out_path": str(tmp_path / "o.pt")},
     )
 
+    # Assert — exact content; fails on revert to str(exc) (would yield "x" * 1000)
+    err = _error_payload(captured)
+    assert err == "x" * 199 + "…"
+
+
+def test_encode_truncates_long_error(captured, tmp_path):
+    # Arrange — non-URL exception isolates the truncation branch of sanitize_for_wire
+    encoder = MagicMock()
+    encoder.encode_prompt.side_effect = OSError("x" * 1000)
+    req = {
+        "jobs": [
+            {"id": "j1", "prompt": "hi", "embed_path": str(tmp_path / "j1.pt")},
+        ]
+    }
+
+    # Act
+    h._handle_encode(MagicMock(), req, encoder)
+
     # Assert
     err = _error_payload(captured)
-    assert len(err) <= 200
-    assert err.endswith("…")
+    assert err == "x" * 199 + "…"
+
+
+def test_job_truncates_long_error(captured, monkeypatch, tmp_path):
+    # Arrange
+    monkeypatch.setattr(
+        torch, "load", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("x" * 1000))
+    )
+    req = {
+        "action": "generate",
+        "jobs": [
+            {
+                "id": "g1",
+                "embed_path": str(tmp_path / "g1.pt"),
+                "out_path": str(tmp_path / "g1.png"),
+            }
+        ],
+    }
+
+    # Act
+    h._handle_job(MagicMock(), req, MagicMock())
+
+    # Assert
+    err = _error_payload(captured)
+    assert err == "x" * 199 + "…"
 
 
 def test_encode_scrubs_credentials_in_error(captured, tmp_path):

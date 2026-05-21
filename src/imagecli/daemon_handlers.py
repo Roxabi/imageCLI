@@ -22,6 +22,14 @@ from roxabi_nats import sanitize_for_wire
 from imagecli.daemon import _send_json
 
 
+def _send_error_safe(conn: socket.socket, exc: BaseException) -> None:
+    """Send a sanitized error payload; log on send failure, never re-raise."""
+    try:
+        _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
+    except Exception as send_exc:
+        print(f"[imagecli daemon] warning: failed to send error: {send_exc}", flush=True)
+
+
 @dataclass
 class _Job:
     conn: socket.socket
@@ -81,10 +89,7 @@ def _handle_blend(conn: socket.socket, req: dict) -> None:
         _send_json(conn, {"ok": True})
 
     except Exception as exc:
-        try:
-            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
-        except Exception:
-            pass
+        _send_error_safe(conn, exc)
     finally:
         conn.close()
 
@@ -152,10 +157,7 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
         _send_json(conn, {"ok": True, "encoded": encoded})
 
     except Exception as exc:
-        try:
-            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
-        except Exception as send_exc:
-            print(f"[imagecli daemon] warning: failed to send encode error: {send_exc}", flush=True)
+        _send_error_safe(conn, exc)
     finally:
         conn.close()
 
@@ -236,12 +238,6 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
         _send_json(conn, {"ok": True, "generated": generated})
 
     except Exception as exc:
-        try:
-            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
-        except Exception as send_exc:
-            print(
-                f"[imagecli daemon] warning: failed to send error response: {send_exc}",
-                flush=True,
-            )
+        _send_error_safe(conn, exc)
     finally:
         conn.close()
