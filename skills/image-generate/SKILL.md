@@ -148,7 +148,7 @@ Execute the command. After generation:
 
 - **VRAM errors:** Close other GPU processes (ollama, ComfyUI). Run `nvidia-smi` to check.
 - **Model not found:** First run downloads models from HuggingFace (~13 GB for Klein). Ensure `HF_TOKEN` is set for gated models.
-- **PuLID engines fail:** Need `uv sync --extra pulid` and model weights at `~/ComfyUI/models/pulid/`.
+- **PuLID engines fail:** Need `uv sync --extra pulid` and model weights at `~/.roxabi/imagecli/weights/pulid/`.
 - **LoRA has no effect:** LoRA only works on `flux2-klein` and `flux2-klein-fp8`. Not supported on `flux2-klein-fp4` (pre-quantized weights).
 
 ## Quick Reference

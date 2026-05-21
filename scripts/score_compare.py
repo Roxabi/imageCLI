@@ -24,7 +24,7 @@ from PIL import Image
 # ─── Buffalo (InsightFace) ────────────────────────────────────────────────────
 
 
-def load_buffalo(model_root="~/ComfyUI/models/insightface"):
+def load_buffalo(model_root="~/.roxabi/imagecli/weights/insightface"):
     from insightface.app import FaceAnalysis
 
     app = FaceAnalysis(
