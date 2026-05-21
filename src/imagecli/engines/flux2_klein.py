@@ -134,10 +134,9 @@ class Flux2KleinEngine(TwoPhaseBase):
         }
 
     def start_generation_phase(self):
-        """Phase 2 setup: offload encoder, load transformer + VAE to GPU."""
-        assert self._pipe is not None
-        # Free encoder VRAM
+        """Phase 2 setup: move transformer + VAE to GPU after encoder teardown."""
         self._teardown_encoder_phase()
+        assert self._pipe is not None
 
         # Transformer (~3.9 GB FP8) + VAE (~0.17 GB) → ~4.1 GB on GPU
         self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]

@@ -2,7 +2,8 @@
 
 Finalizes the encode/generate plumbing that was previously duplicated word-for-word
 across `flux2_klein.py`, `flux2_klein_fp8.py`, and `flux2_klein_fp4.py`. Subclasses
-provide only `_load_pipeline()`; the rest is inherited.
+provide `_load_pipeline()` plus the engine-specific Phase 1/2 scaffolding
+(`load_for_encode`, `encode_prompt`, `start_generation_phase`, `load_all_on_gpu`).
 """
 
 from __future__ import annotations
@@ -11,8 +12,9 @@ import gc
 import logging
 import random
 from abc import abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from imagecli.engine import ImageEngine
 
@@ -23,8 +25,11 @@ class TwoPhaseBase(ImageEngine):
     """Concrete 2-phase batch base — overrides `TwoPhaseMixin` stubs with real impls.
 
     Subclasses must override `_load_pipeline()` to load + (optionally) quantize the
-    underlying pipeline. The rest of the 2-phase + all-on-GPU machinery is inherited
-    finalized.
+    underlying pipeline. Engine-specific Phase 1/2 lifecycle methods
+    (`load_for_encode`, `encode_prompt`, `start_generation_phase`, `load_all_on_gpu`)
+    are still per-subclass because compile flags, VAE placement, and NVFP4 patching
+    diverge. The `encode_and_generate`, `generate_from_embeddings`, and
+    `_teardown_encoder_phase` methods are finalized here.
     """
 
     supports_two_phase: ClassVar[bool] = True
@@ -52,7 +57,7 @@ class TwoPhaseBase(ImageEngine):
         guidance: float = 4.0,
         seed: int | None = None,
         output_path: Path,
-        callback=None,
+        callback: Callable[..., dict] | None = None,
     ) -> Path:
         """Encode + generate in one shot (all-on-GPU mode)."""
         import torch
@@ -64,7 +69,7 @@ class TwoPhaseBase(ImageEngine):
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        pipe_kwargs = {
+        pipe_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "width": width,
             "height": height,
@@ -100,7 +105,7 @@ class TwoPhaseBase(ImageEngine):
         guidance: float = 4.0,
         seed: int | None = None,
         output_path: Path,
-        callback=None,
+        callback: Callable[..., dict] | None = None,
     ) -> Path:
         """Generate image from pre-computed prompt embeddings (Phase 2)."""
         import torch
@@ -109,7 +114,7 @@ class TwoPhaseBase(ImageEngine):
             seed = random.randint(0, 2**32 - 1)
         generator = torch.Generator("cpu").manual_seed(seed)
 
-        pipe_kwargs = {
+        pipe_kwargs: dict[str, Any] = {
             "prompt_embeds": embeddings["prompt_embeds"].to("cuda"),
             "width": width,
             "height": height,

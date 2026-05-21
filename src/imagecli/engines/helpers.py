@@ -1,6 +1,12 @@
-"""Free helpers shared across engine implementations."""
+"""Free helpers shared across engine implementations.
+
+Module-level functions (no leading underscore) — imported by sibling engine modules
+and by `engines/_two_phase_base.py`.
+"""
 
 from __future__ import annotations
+
+__all__ = ["set_execution_device"]
 
 
 def set_execution_device(pipe) -> None:
