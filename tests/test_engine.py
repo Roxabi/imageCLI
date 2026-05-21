@@ -10,6 +10,7 @@ import pytest
 from imagecli.engine import (
     ImageEngine,
     InsufficientResourcesError,
+    UnknownEngineError,
     _get_registry,
     get_compute_capability,
     get_engine,
@@ -184,6 +185,23 @@ def test_get_engine_invalid():
     # Act / Assert
     with pytest.raises(ValueError, match="nonexistent"):
         get_engine("nonexistent")
+
+
+def test_get_engine_unknown_raises_typed_error_with_available_list():
+    """Regression guard: the raise site must use the typed
+    :class:`UnknownEngineError`, not bare :class:`ValueError`. The exception
+    must also carry an ``available`` list so downstream dispatchers (NATS
+    validators, daemon error mapper) can read the registry without parsing
+    the message string."""
+    # Act / Assert
+    with pytest.raises(UnknownEngineError) as exc_info:
+        get_engine("definitely-not-a-real-engine-name")
+    assert exc_info.value.available, (
+        "UnknownEngineError must carry the registry list in .available; "
+        "got empty list — downstream consumers can no longer build a "
+        "structured detail without parsing str(exc)."
+    )
+    assert "flux2-klein" in exc_info.value.available
 
 
 def test_get_engine_rejects_loras_and_lora_path_combo():
