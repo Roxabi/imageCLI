@@ -18,7 +18,15 @@ class UnknownEngineError(ValueError):
     catch ``ValueError`` generically; the distinct type lets dispatchers
     (e.g. NATS validators) recognize the case via ``isinstance`` rather than
     by substring-matching the message.
+
+    ``available`` carries the registered engine names as a structured
+    attribute so downstream consumers (validators, wire-error builders)
+    can read the list without parsing :func:`str` of the exception.
     """
+
+    def __init__(self, message: str, *, available: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.available: list[str] = list(available) if available else []
 
 
 def _get_registry() -> dict[str, type[ImageEngine]]:
@@ -59,8 +67,12 @@ def get_engine(
 ) -> ImageEngine:
     registry = _get_registry()
     if name not in registry:
-        known = ", ".join(registry)
-        raise UnknownEngineError(f"Unknown engine {name!r}. Available: {known}")
+        available = list(registry)
+        known = ", ".join(available)
+        raise UnknownEngineError(
+            f"Unknown engine {name!r}. Available: {known}",
+            available=available,
+        )
     if loras is not None:
         if lora_path is not None or trigger is not None or embedding_path is not None:
             raise ValueError(

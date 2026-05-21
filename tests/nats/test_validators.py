@@ -26,14 +26,40 @@ def test_unknown_engine_dispatch_isinstance_not_substring() -> None:
     )
 
 
-def test_unknown_engine_detail_extracted_from_message_when_present() -> None:
-    """When the message follows the original ``Unknown engine 'x'. Available: …``
-    shape, the detail after the first ``: `` is returned (preserves the
-    existing observable behaviour for legitimate raise sites)."""
-    exc = UnknownEngineError("Unknown engine 'nope'. Available: flux2-klein, sd35")
+def test_unknown_engine_detail_built_from_available_attribute() -> None:
+    """The dispatcher reads the structured ``available`` attribute, not the
+    message string. Detail is the comma-joined registry list — no parsing of
+    ``str(exc)`` involved."""
+    exc = UnknownEngineError(
+        "any message here",
+        available=["flux2-klein", "sd35"],
+    )
     code, detail = _map_exception_to_error(exc)
     assert code == "unknown_engine"
     assert detail == "flux2-klein, sd35"
+
+
+def test_unknown_engine_detail_unknown_when_available_empty() -> None:
+    """When the exception was raised without an ``available`` list (legacy
+    callers or constructed in tests), the dispatcher reports ``unknown``
+    rather than leaking the message."""
+    exc = UnknownEngineError("some message")
+    code, detail = _map_exception_to_error(exc)
+    assert code == "unknown_engine"
+    assert detail == "unknown"
+
+
+def test_unknown_engine_detail_does_not_leak_message_content() -> None:
+    """The dispatcher must NOT include attacker-controllable message
+    fragments (e.g. paths, attacker-supplied engine names) in the wire
+    detail — only the structured ``available`` list."""
+    exc = UnknownEngineError(
+        "Unknown engine '/etc/passwd'. Available: flux2-klein",
+        available=["flux2-klein"],
+    )
+    _code, detail = _map_exception_to_error(exc)
+    assert "/etc/passwd" not in detail
+    assert detail == "flux2-klein"
 
 
 def test_plain_value_error_does_not_route_to_unknown_engine() -> None:
