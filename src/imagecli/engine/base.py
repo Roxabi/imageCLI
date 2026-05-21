@@ -155,8 +155,14 @@ class ImageEngine(TwoPhaseMixin, ABC):
         height: int,
     ) -> Path:
         return _h.save_image(
-            image, output_path, engine_name=self.name,
-            seed=seed, steps=steps, guidance=guidance, width=width, height=height,
+            image,
+            output_path,
+            engine_name=self.name,
+            seed=seed,
+            steps=steps,
+            guidance=guidance,
+            width=width,
+            height=height,
         )
 
     def _finalize_load(self, pipe: object) -> None:
@@ -269,5 +275,3 @@ class ImageEngine(TwoPhaseMixin, ABC):
             return
         apply_pivotals_to_pipe(self._pipe, pivotals)
         _patch_encode_prompt(self._pipe)
-
-
