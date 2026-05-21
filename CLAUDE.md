@@ -129,6 +129,12 @@ Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
 
 → `docs/lora.md` — config, load order, tuning.
 
+## Container Deployment
+
+imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`image-worker` role). Deploy with `bash deploy/install.sh` (idempotent, supports `--dry-run`). Requires secret `imagecli-nats-gen` (NATS NKey seed) and Phase 1D operator data move (`~/ComfyUI/models/pulid` → `~/.roxabi/imagecli/weights/pulid`). UID 1503 fixed in image.
+
+→ `docs/QUADLET-DEPLOYMENT.md` — install runbook, secret rotation, diagnostics, Phase 1D operator actions.
+
 ## Conventions
 
 - ¬over-engineering — thin flat CLI
