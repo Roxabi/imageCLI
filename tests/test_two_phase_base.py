@@ -97,7 +97,7 @@ def test_encode_and_generate_calls_pipe_and_saves(tmp_path: Path, monkeypatch):
         output_path=tmp_path / "out.png",
     )
 
-    assert pipe.called
+    pipe.assert_called_once()
     save_image.assert_called_once()
     assert returned == Path("/tmp/fake.png")
     kwargs = pipe.call_args.kwargs
@@ -105,6 +105,58 @@ def test_encode_and_generate_calls_pipe_and_saves(tmp_path: Path, monkeypatch):
     assert kwargs["width"] == 512
     assert kwargs["num_inference_steps"] == 10
     assert kwargs["guidance_scale"] == 4.0
+
+
+def test_encode_and_generate_seeds_when_none(tmp_path: Path, monkeypatch):
+    """`seed=None` (default) → `random.randint` invoked to source a seed; gen proceeds."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    sentinel_seed = 12345
+    monkeypatch.setattr(
+        "imagecli.engines._two_phase_base.random.randint", lambda _lo, _hi: sentinel_seed
+    )
+
+    eng, pipe, save_image = _make_engine_with_pipe()
+    fake_result = MagicMock()
+    fake_result.images = [MagicMock()]
+    pipe.return_value = fake_result
+
+    eng.encode_and_generate(prompt="hello", seed=None, output_path=tmp_path / "out.png")
+
+    pipe.assert_called_once()
+    save_image.assert_called_once()
+    # _save_image receives the resolved seed
+    assert save_image.call_args.kwargs["seed"] == sentinel_seed
+
+
+def test_generate_from_embeddings_seeds_when_none(tmp_path: Path, monkeypatch):
+    """`seed=None` (default) → `random.randint` invoked to source a seed; gen proceeds."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    sentinel_seed = 67890
+    monkeypatch.setattr(
+        "imagecli.engines._two_phase_base.random.randint", lambda _lo, _hi: sentinel_seed
+    )
+
+    eng, pipe, save_image = _make_engine_with_pipe()
+    fake_result = MagicMock()
+    fake_result.images = [MagicMock()]
+    pipe.return_value = fake_result
+
+    embed = MagicMock()
+    embed.to.return_value = embed
+
+    eng.generate_from_embeddings(
+        embeddings={"prompt_embeds": embed}, seed=None, output_path=tmp_path / "out.png"
+    )
+
+    pipe.assert_called_once()
+    save_image.assert_called_once()
+    assert save_image.call_args.kwargs["seed"] == sentinel_seed
 
 
 def test_encode_and_generate_passes_callback(tmp_path: Path, monkeypatch):
@@ -154,7 +206,7 @@ def test_generate_from_embeddings_moves_embeds_to_cuda_and_saves(tmp_path: Path,
     )
 
     embed.to.assert_called_with("cuda")
-    assert pipe.called
+    pipe.assert_called_once()
     save_image.assert_called_once()
 
 
