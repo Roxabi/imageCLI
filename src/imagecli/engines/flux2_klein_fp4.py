@@ -17,10 +17,10 @@ Install: uv sync --group fp4
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import ClassVar
 
-from imagecli.engine import EngineCapabilities, ImageEngine
+from imagecli.engine import EngineCapabilities
+from imagecli.engines._two_phase_base import TwoPhaseBase
+from imagecli.engines.helpers import set_execution_device
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,12 @@ NVFP4_FILENAME = "flux-2-klein-4b-nvfp4.safetensors"
 BASE_REPO = "black-forest-labs/FLUX.2-klein-4B"
 
 
-class Flux2KleinFP4Engine(ImageEngine):
+class Flux2KleinFP4Engine(TwoPhaseBase):
     name = "flux2-klein-fp4"
     description = "FLUX.2-klein-4B NVFP4 — Blackwell FP4 via comfy-kitchen (~2 GB transformer)"
     model_id = BASE_REPO
     vram_gb = 4.0
     capabilities = EngineCapabilities(negative_prompt=False)
-    supports_two_phase: ClassVar[bool] = True
 
     def _check_requirements(self):
         import torch
@@ -92,20 +91,6 @@ class Flux2KleinFP4Engine(ImageEngine):
         patched = patch_transformer_nvfp4(self._pipe.transformer, nvfp4_path)
         logger.info("Patched %d linear layers with NVFP4 weights.", patched)
 
-    def _set_execution_device(self):
-        import torch
-
-        self._pipe._execution_device_override = torch.device("cuda")  # type: ignore[union-attr]
-        orig_cls = type(self._pipe)
-        if not hasattr(orig_cls, "_orig_execution_device"):
-            orig_cls._orig_execution_device = orig_cls._execution_device  # type: ignore[attr-defined]
-            orig_cls._execution_device = property(  # type: ignore[attr-defined]
-                lambda pipe: (
-                    getattr(pipe, "_execution_device_override", None)
-                    or orig_cls._orig_execution_device.fget(pipe)  # type: ignore[attr-defined]
-                )
-            )
-
     def _load(self):
         if self._pipe is not None:
             return
@@ -113,7 +98,7 @@ class Flux2KleinFP4Engine(ImageEngine):
         self._pipe.vae.to("cuda")  # type: ignore[union-attr]
         self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
         self._optimize_pipe(self._pipe, compile=False)
-        self._set_execution_device()
+        set_execution_device(self._pipe)
         logger.info("Model ready (all on GPU, NVFP4 transformer).")
 
     # ── All-on-GPU batch ─────────────────────────────────────────────────
@@ -122,54 +107,9 @@ class Flux2KleinFP4Engine(ImageEngine):
         self._load_pipeline()
         self._pipe.text_encoder.to("cuda")  # type: ignore[union-attr]
         self._pipe.vae.to("cuda")  # type: ignore[union-attr]
-        self._set_execution_device()
+        set_execution_device(self._pipe)
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("All components on GPU — NVFP4 transformer.")
-
-    def encode_and_generate(
-        self,
-        prompt: str,
-        *,
-        width: int = 1024,
-        height: int = 1024,
-        steps: int = 50,
-        guidance: float = 4.0,
-        seed: int | None = None,
-        output_path: Path,
-        callback=None,
-    ) -> Path:
-        import random
-        import torch
-
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        generator = torch.Generator("cpu").manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        pipe_kwargs = {
-            "prompt": prompt,
-            "width": width,
-            "height": height,
-            "num_inference_steps": steps,
-            "guidance_scale": guidance,
-            "generator": generator,
-        }
-        if callback is not None:
-            pipe_kwargs["callback_on_step_end"] = callback
-
-        with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
-
-        return self._save_image(
-            result.images[0],
-            output_path,
-            seed=seed,
-            steps=steps,
-            guidance=guidance,
-            width=width,
-            height=height,
-        )
 
     # ── 2-phase batch ──────────────────────────────────────────────────────
 
@@ -190,58 +130,8 @@ class Flux2KleinFP4Engine(ImageEngine):
         return {"prompt_embeds": prompt_embeds.cpu(), "text_ids": text_ids.cpu()}
 
     def start_generation_phase(self):
-        import gc
-        import torch
-
-        self._pipe.text_encoder.to("cpu")  # type: ignore[union-attr]
-        torch.cuda.empty_cache()
-        gc.collect()
+        self._teardown_encoder_phase()
         self._pipe.vae.to("cuda")  # type: ignore[union-attr]
-        self._set_execution_device()
+        set_execution_device(self._pipe)
         self._optimize_pipe(self._pipe, compile=False)
         logger.info("Generation phase ready (NVFP4 transformer + VAE on GPU).")
-
-    def generate_from_embeddings(
-        self,
-        embeddings: dict,
-        *,
-        width: int = 1024,
-        height: int = 1024,
-        steps: int = 50,
-        guidance: float = 4.0,
-        seed: int | None = None,
-        output_path: Path,
-        callback=None,
-    ) -> Path:
-        import random
-        import torch
-
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        generator = torch.Generator("cpu").manual_seed(seed)
-
-        pipe_kwargs = {
-            "prompt_embeds": embeddings["prompt_embeds"].to("cuda"),
-            "width": width,
-            "height": height,
-            "num_inference_steps": steps,
-            "guidance_scale": guidance,
-            "generator": generator,
-        }
-        if callback is not None:
-            pipe_kwargs["callback_on_step_end"] = callback
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
-
-        return self._save_image(
-            result.images[0],
-            output_path,
-            seed=seed,
-            steps=steps,
-            guidance=guidance,
-            width=width,
-            height=height,
-        )
