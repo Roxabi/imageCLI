@@ -235,7 +235,7 @@ flowchart LR
 - [ ] `grep -F "str(exc)" src/imagecli/daemon_handlers.py | wc -l` returns `0`.
 - [ ] All 3 socket-bound error paths use `sanitize_for_wire(exc)`.
 - [ ] Unit test: unknown-engine NATS request returns `WorkerError{code:"unknown_engine"}` even when raise-site message is rewritten (regression guard against substring match).
-- [ ] Unit test: `daemon_handlers` injected `OSError("/secret/path: denied")` is sanitized in socket response (no `/secret/path`).
+- [ ] Unit test: `daemon_handlers` exception with URL credentials (e.g. `OSError("nats://u:p@host: denied")`) is scrubbed in socket response (`***:***` replaces userinfo); a long-message exception is truncated to ≤200 chars with `…` marker. Arbitrary absolute-path stripping is **out of scope** for Slice 4 — `roxabi_nats.sanitize_for_wire` only scrubs URL userinfo for known credential-bearing schemes + truncates. Path-stripping tracked upstream in [lyra#1307](https://github.com/Roxabi/lyra/issues/1307).
 
 **TwoPhaseBase**
 - [ ] `grep -c "def encode_and_generate" src/imagecli/engines/*.py` returns exactly `1` (in the base).
