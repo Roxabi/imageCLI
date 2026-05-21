@@ -38,13 +38,12 @@ REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 ALLOWED_FORMATS = frozenset({"png", "jpeg", "webp"})
 
 # Allowlisted directories for LoRA and embedding paths
-# These are the standard ComfyUI model directories
+# Standard Roxabi data convention: ~/.roxabi/imagecli/ (S5 data dirs standard)
 ALLOWED_LORA_DIRS = [
-    Path.home() / "ComfyUI" / "models" / "loras",
-    Path.home() / "ComfyUI" / "models" / "lora",
+    Path.home() / ".roxabi" / "imagecli" / "loras",
 ]
 ALLOWED_EMBEDDING_DIRS = [
-    Path.home() / "ComfyUI" / "models" / "embeddings",
+    Path.home() / ".roxabi" / "imagecli" / "embeddings",
 ]
 
 

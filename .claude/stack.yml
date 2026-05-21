@@ -22,7 +22,7 @@ testing:
   secrets: trufflehog
 
 deploy:
-  platform: none
+  platform: quadlet
 
 commands:
   dev: uv run imagecli

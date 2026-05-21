@@ -29,3 +29,10 @@ format = "png"
 
 # JPEG/WebP quality (1-100, ignored for PNG)
 quality = 95
+
+[paths]
+# Root directory for external model weights (PuLID, InsightFace, LoRAs).
+# Operator action required: mv ~/ComfyUI/models/pulid ~/.roxabi/imagecli/weights/pulid
+#                           mv ~/ComfyUI/models/insightface ~/.roxabi/imagecli/weights/insightface
+# Default: ~/.roxabi/imagecli/weights/
+weights_dir = "~/.roxabi/imagecli/weights"

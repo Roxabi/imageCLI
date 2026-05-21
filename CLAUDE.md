@@ -31,7 +31,7 @@ src/imagecli/
   config.py               — TOML loader (walks CWD → $HOME)
   engine.py               — `ImageEngine` ABC + registry
   markdown.py             — YAML frontmatter parser
-  daemon.py               — NATS adapter / socket daemon (`imagecli serve`)
+  daemon.py               — AF_UNIX socket daemon (preload + serve, `imagecli serve`)
   engines/
     flux2_klein.py        — default, quanto FP8
     flux2_klein_fp8.py    — torchao FP8 (40% slower, torch.compile OK)
@@ -111,7 +111,7 @@ Priority: CLI flag > frontmatter > imagecli.toml > default.
 - Output: never overwrite existing — auto-suffix `_1`, `_2`, …
 - Default: `flux2-klein` — best quality/VRAM @ 16GB
 - `pulid-flux2-klein` always `compile=False` (captures forward methods, ¬compatible w/ per-gen patching)
-- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/ComfyUI/models/insightface/`
+- PuLID weights: `~/.roxabi/imagecli/weights/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/.roxabi/imagecli/weights/insightface/`
 
 → `docs/pulid-internals.md` — CA remapping, dim projection (3072↔4096), GGUF details.
 
@@ -128,6 +128,12 @@ Inference: `flux2-klein` ∨ `flux2-klein-fp8` via `--lora` | `lora_path`. Fused
 Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
 
 → `docs/lora.md` — config, load order, tuning.
+
+## Container Deployment
+
+imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`image-worker` role). Deploy with `bash deploy/install.sh` (idempotent, supports `--dry-run`). Requires secret `imagecli-nats-gen` (NATS NKey seed) and Phase 1D operator data move (`~/ComfyUI/models/pulid` → `~/.roxabi/imagecli/weights/pulid`). UID 1503 fixed in image.
+
+→ `docs/QUADLET-DEPLOYMENT.md` — install runbook, secret rotation, diagnostics, Phase 1D operator actions.
 
 ## Conventions
 

@@ -243,8 +243,8 @@ class TestImageNatsAdapter:
         msg = MockMsg()
         payload = _valid_payload(prompt="a cat", engine="flux2-klein")
         payload["loras"] = [
-            {"path": "/ComfyUI/models/loras/style.safetensors", "trigger": "sty"},
-            {"path": "/ComfyUI/models/loras/face.safetensors", "trigger": "fce"},
+            {"path": "/.roxabi/imagecli/loras/style.safetensors", "trigger": "sty"},
+            {"path": "/.roxabi/imagecli/loras/face.safetensors", "trigger": "fce"},
         ]
 
         captured_kwargs: dict = {}
@@ -273,10 +273,10 @@ class TestImageNatsAdapter:
         loras = captured_kwargs["loras"]
         assert len(loras) == 2
         assert isinstance(loras[0], LoraSpec)
-        assert loras[0].path == "/ComfyUI/models/loras/style.safetensors"
+        assert loras[0].path == "/.roxabi/imagecli/loras/style.safetensors"
         assert loras[0].trigger == "sty"
         assert isinstance(loras[1], LoraSpec)
-        assert loras[1].path == "/ComfyUI/models/loras/face.safetensors"
+        assert loras[1].path == "/.roxabi/imagecli/loras/face.safetensors"
         assert loras[1].trigger == "fce"
 
     # ------------------------------------------------------------------
@@ -291,10 +291,10 @@ class TestImageNatsAdapter:
         adapter = _make_adapter(max_concurrent=1)
         msg = MockMsg()
         payload = _valid_payload(prompt="a cat", engine="flux2-klein")
-        payload["lora_path"] = "/ComfyUI/models/loras/myface.safetensors"
+        payload["lora_path"] = "/.roxabi/imagecli/loras/myface.safetensors"
         payload["lora_scale"] = 1.2
         payload["trigger"] = "lyraface"
-        payload["embedding_path"] = "/ComfyUI/models/embeddings/myface.safetensors"
+        payload["embedding_path"] = "/.roxabi/imagecli/embeddings/myface.safetensors"
 
         captured_kwargs: dict = {}
 
@@ -322,10 +322,10 @@ class TestImageNatsAdapter:
         loras = captured_kwargs["loras"]
         assert len(loras) == 1
         assert isinstance(loras[0], LoraSpec)
-        assert loras[0].path == "/ComfyUI/models/loras/myface.safetensors"
+        assert loras[0].path == "/.roxabi/imagecli/loras/myface.safetensors"
         assert loras[0].scale == 1.2
         assert loras[0].trigger == "lyraface"
-        assert loras[0].embedding_path == "/ComfyUI/models/embeddings/myface.safetensors"
+        assert loras[0].embedding_path == "/.roxabi/imagecli/embeddings/myface.safetensors"
 
     # ------------------------------------------------------------------
     # Case 7: mixed form (loras list + singular key) → error response
@@ -338,8 +338,8 @@ class TestImageNatsAdapter:
         adapter = _make_adapter(max_concurrent=1)
         msg = MockMsg()
         payload = _valid_payload(prompt="a cat", engine="flux2-klein")
-        payload["loras"] = [{"path": "/ComfyUI/models/loras/style.safetensors"}]
-        payload["lora_path"] = "/ComfyUI/models/loras/face.safetensors"  # mixed — forbidden
+        payload["loras"] = [{"path": "/.roxabi/imagecli/loras/style.safetensors"}]
+        payload["lora_path"] = "/.roxabi/imagecli/loras/face.safetensors"  # mixed — forbidden
 
         with patch(
             "imagecli.engine.list_engines",

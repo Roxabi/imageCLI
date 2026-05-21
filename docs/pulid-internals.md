@@ -6,9 +6,9 @@
 
 ## External Weights
 
-- `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` (Klein)
-- `~/ComfyUI/models/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1)
-- InsightFace AntelopeV2 at `~/ComfyUI/models/insightface/`
+- `~/.roxabi/imagecli/weights/pulid/pulid_flux2_klein_v2.safetensors` (Klein)
+- `~/.roxabi/imagecli/weights/pulid/pulid_flux_v0.9.1.safetensors` (FLUX.1)
+- InsightFace AntelopeV2 at `~/.roxabi/imagecli/weights/insightface/`
 
 Install: `uv sync --extra pulid`
 
