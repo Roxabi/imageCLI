@@ -1,6 +1,6 @@
 # imageCLI
 
-![Python](https://img.shields.io/badge/python-3.11--3.12-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-package%20manager-DE5FE9)
 ![CUDA](https://img.shields.io/badge/CUDA-enabled-76B900?logo=nvidia&logoColor=white)
 ![version](https://img.shields.io/badge/version-0.1.0-22c55e)
@@ -15,7 +15,7 @@ imageCLI wraps all of that into a single command. Point it at a text prompt or a
 
 ## Requirements
 
-- Python 3.11–3.12
+- Python 3.12
 - CUDA GPU (16GB VRAM recommended; 10GB minimum for fp8 engines)
 - CUDA 13.0 (cu130) for NVFP4 engine; CUDA 12.8+ for all others
 - [uv](https://docs.astral.sh/uv/) package manager

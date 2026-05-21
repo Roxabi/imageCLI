@@ -31,7 +31,7 @@ src/imagecli/
   config.py               — TOML loader (walks CWD → $HOME)
   engine.py               — `ImageEngine` ABC + registry
   markdown.py             — YAML frontmatter parser
-  daemon.py               — NATS adapter / socket daemon (`imagecli serve`)
+  daemon.py               — AF_UNIX socket daemon (preload + serve, `imagecli serve`)
   engines/
     flux2_klein.py        — default, quanto FP8
     flux2_klein_fp8.py    — torchao FP8 (40% slower, torch.compile OK)
@@ -111,7 +111,7 @@ Priority: CLI flag > frontmatter > imagecli.toml > default.
 - Output: never overwrite existing — auto-suffix `_1`, `_2`, …
 - Default: `flux2-klein` — best quality/VRAM @ 16GB
 - `pulid-flux2-klein` always `compile=False` (captures forward methods, ¬compatible w/ per-gen patching)
-- PuLID weights: `~/ComfyUI/models/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/ComfyUI/models/insightface/`
+- PuLID weights: `~/.roxabi/imagecli/weights/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/.roxabi/imagecli/weights/insightface/`
 
 → `docs/pulid-internals.md` — CA remapping, dim projection (3072↔4096), GGUF details.
 
