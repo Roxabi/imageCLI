@@ -15,23 +15,22 @@ Requires: uv sync --group fp8 (installs torchao)
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import ClassVar
 
-from imagecli.engine import EngineCapabilities, ImageEngine
+from imagecli.engine import EngineCapabilities
+from imagecli.engines._two_phase_base import TwoPhaseBase
+from imagecli.engines.helpers import set_execution_device
 
 logger = logging.getLogger(__name__)
 
 BASE_REPO = "black-forest-labs/FLUX.2-klein-4B"
 
 
-class Flux2KleinFP8Engine(ImageEngine):
+class Flux2KleinFP8Engine(TwoPhaseBase):
     name = "flux2-klein-fp8"
     description = "FLUX.2-klein-4B torchao FP8 — no quanto, torch.compile compatible (slower than quanto, see notes)"
     model_id = BASE_REPO
     vram_gb = 8.0
     capabilities = EngineCapabilities(negative_prompt=False)
-    supports_two_phase: ClassVar[bool] = True
 
     def _load_pipeline(self):
         """Load base pipeline + quantize transformer to FP8 via torchao."""
@@ -98,22 +97,6 @@ class Flux2KleinFP8Engine(ImageEngine):
 
     # ── All-on-GPU batch ─────────────────────────────────────────────────
 
-    def _set_execution_device(self):
-        """Patch pipeline execution device to cuda."""
-        import torch
-
-        assert self._pipe is not None
-        self._pipe._execution_device_override = torch.device("cuda")  # type: ignore[attr-defined]
-        orig_cls = type(self._pipe)
-        if not hasattr(orig_cls, "_orig_execution_device"):
-            orig_cls._orig_execution_device = orig_cls._execution_device  # type: ignore[attr-defined]
-            orig_cls._execution_device = property(  # type: ignore[attr-defined]
-                lambda pipe: (
-                    getattr(pipe, "_execution_device_override", None)
-                    or orig_cls._orig_execution_device.fget(pipe)  # type: ignore[attr-defined]
-                )
-            )
-
     def load_all_on_gpu(self):
         """Load everything to GPU at once. No offloading between phases."""
         self._load_pipeline()
@@ -121,60 +104,10 @@ class Flux2KleinFP8Engine(ImageEngine):
         self._pipe.text_encoder.to("cuda")  # type: ignore[attr-defined]
         self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
         self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
-        self._set_execution_device()
+        set_execution_device(self._pipe)
         # No QLinear → compile works!
         self._optimize_pipe(self._pipe)
         logger.info("All components on GPU — torchao FP8, compile enabled.")
-
-    def encode_and_generate(
-        self,
-        prompt: str,
-        *,
-        width: int = 1024,
-        height: int = 1024,
-        steps: int = 50,
-        guidance: float = 4.0,
-        seed: int | None = None,
-        output_path: Path,
-        callback=None,
-    ) -> Path:
-        """Encode + generate in one shot (all-on-GPU mode)."""
-        import random
-
-        import torch
-
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        generator = torch.Generator("cpu").manual_seed(seed)
-
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        pipe_kwargs = {
-            "prompt": prompt,
-            "width": width,
-            "height": height,
-            "num_inference_steps": steps,
-            "guidance_scale": guidance,
-            "generator": generator,
-        }
-        if callback is not None:
-            pipe_kwargs["callback_on_step_end"] = callback
-
-        assert self._pipe is not None
-        with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
-
-        image = result.images[0]
-        return self._save_image(
-            image,
-            output_path,
-            seed=seed,
-            steps=steps,
-            guidance=guidance,
-            width=width,
-            height=height,
-        )
 
     # ── 2-phase batch ──────────────────────────────────────────────────────
 
@@ -203,68 +136,12 @@ class Flux2KleinFP8Engine(ImageEngine):
 
     def start_generation_phase(self):
         """Phase 2 setup: offload encoder, load transformer + VAE to GPU, compile."""
-        import gc
-
-        import torch
-
         assert self._pipe is not None
-        self._pipe.text_encoder.to("cpu")  # type: ignore[attr-defined]
-        torch.cuda.empty_cache()
-        gc.collect()
+        self._teardown_encoder_phase()
 
         self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
         self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
-        self._set_execution_device()
+        set_execution_device(self._pipe)
         # No QLinear → compile works in 2-phase too!
         self._optimize_pipe(self._pipe)
         logger.info("Generation phase ready (transformer + VAE on GPU, compile enabled).")
-
-    def generate_from_embeddings(
-        self,
-        embeddings: dict,
-        *,
-        width: int = 1024,
-        height: int = 1024,
-        steps: int = 50,
-        guidance: float = 4.0,
-        seed: int | None = None,
-        output_path: Path,
-        callback=None,
-    ) -> Path:
-        """Generate image from pre-computed prompt embeddings."""
-        import random
-
-        import torch
-
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        generator = torch.Generator("cpu").manual_seed(seed)
-
-        pipe_kwargs = {
-            "prompt_embeds": embeddings["prompt_embeds"].to("cuda"),
-            "width": width,
-            "height": height,
-            "num_inference_steps": steps,
-            "guidance_scale": guidance,
-            "generator": generator,
-        }
-        if callback is not None:
-            pipe_kwargs["callback_on_step_end"] = callback
-
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        assert self._pipe is not None
-        with torch.inference_mode():
-            result = self._pipe(**pipe_kwargs)  # type: ignore[operator]
-
-        image = result.images[0]
-        return self._save_image(
-            image,
-            output_path,
-            seed=seed,
-            steps=steps,
-            guidance=guidance,
-            width=width,
-            height=height,
-        )
