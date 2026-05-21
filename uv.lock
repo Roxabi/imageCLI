@@ -587,6 +587,7 @@ dependencies = [
     { name = "peft" },
     { name = "pillow" },
     { name = "protobuf" },
+    { name = "roxabi-contracts" },
     { name = "roxabi-nats" },
     { name = "sentencepiece" },
     { name = "torch" },
@@ -632,7 +633,8 @@ requires-dist = [
     { name = "peft", specifier = ">=0.18.1" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", specifier = ">=5.0" },
-    { name = "roxabi-nats", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&tag=roxabi-nats%2Fv0.4.1" },
+    { name = "roxabi-contracts", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging" },
+    { name = "roxabi-nats", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging" },
     { name = "sentencepiece", specifier = ">=0.2.1" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "torch", specifier = ">=2.11", index = "https://download.pytorch.org/whl/cu130" },
@@ -1644,7 +1646,7 @@ wheels = [
 [[package]]
 name = "roxabi-contracts"
 version = "0.4.0"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&tag=roxabi-nats%2Fv0.4.1#7a21ce8e1199147c083e5f65b0ed35cfddf6e892" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -1652,7 +1654,7 @@ dependencies = [
 [[package]]
 name = "roxabi-nats"
 version = "0.4.1"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&tag=roxabi-nats%2Fv0.4.1#7a21ce8e1199147c083e5f65b0ed35cfddf6e892" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
 dependencies = [
     { name = "nats-py" },
     { name = "nkeys" },
