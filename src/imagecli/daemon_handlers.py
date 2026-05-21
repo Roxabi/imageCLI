@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from roxabi_nats import sanitize_for_wire
+
 from imagecli.daemon import _send_json
 
 
@@ -80,7 +82,7 @@ def _handle_blend(conn: socket.socket, req: dict) -> None:
 
     except Exception as exc:
         try:
-            _send_json(conn, {"ok": False, "error": str(exc)})
+            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
         except Exception:
             pass
     finally:
@@ -151,7 +153,7 @@ def _handle_encode(conn: socket.socket, req: dict, encoder_pipe: object) -> None
 
     except Exception as exc:
         try:
-            _send_json(conn, {"ok": False, "error": str(exc)})
+            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
         except Exception as send_exc:
             print(f"[imagecli daemon] warning: failed to send encode error: {send_exc}", flush=True)
     finally:
@@ -235,7 +237,7 @@ def _handle_job(conn: socket.socket, req: dict, pipe: object) -> None:
 
     except Exception as exc:
         try:
-            _send_json(conn, {"ok": False, "error": str(exc)})
+            _send_json(conn, {"ok": False, "error": sanitize_for_wire(exc)})
         except Exception as send_exc:
             print(
                 f"[imagecli daemon] warning: failed to send error response: {send_exc}",
