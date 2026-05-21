@@ -32,6 +32,26 @@ except ImportError as _e:
     ImageNatsAdapter = None  # type: ignore[assignment,misc]
 
 
+def test_adapter_binds_subjects_from_contracts() -> None:
+    """ImageNatsAdapter must bind to subjects sourced from roxabi_contracts.image,
+    not to hardcoded ``lyra.image.*`` string literals. Guards Cross-repo #1
+    from #89: a subject rename upstream propagates via `uv sync` instead of
+    requiring a manual sweep in this repo."""
+    _require_imports()
+    from roxabi_contracts.image import SUBJECTS
+
+    assert ImageNatsAdapter is not None
+    adapter = ImageNatsAdapter(max_concurrent=1)  # type: ignore[arg-type]
+    assert adapter.subject == SUBJECTS.image_request, (
+        f"adapter.subject ({adapter.subject!r}) must equal SUBJECTS.image_request "
+        f"({SUBJECTS.image_request!r}); legacy hardcoded literal still in use."
+    )
+    assert adapter._heartbeat_subject == SUBJECTS.image_heartbeat, (
+        f"adapter._heartbeat_subject ({adapter._heartbeat_subject!r}) must equal "
+        f"SUBJECTS.image_heartbeat ({SUBJECTS.image_heartbeat!r})."
+    )
+
+
 def _require_imports() -> None:
     if _import_error is not None:
         pytest.fail(f"imagecli.nats.adapter not yet implemented (RED): {_import_error}")

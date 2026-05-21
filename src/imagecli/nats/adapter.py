@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from roxabi_contracts.errors import WorkerError
-from roxabi_contracts.image import ImageResponse
+from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
 
 from imagecli.paths import move_to_nats_output
@@ -20,8 +20,6 @@ from imagecli.nats.validators import _map_exception_to_error, _resolve_loras, _v
 
 log = logging.getLogger(__name__)
 
-SUBJECT = "lyra.image.generate.request"
-HEARTBEAT_SUBJECT = "lyra.image.heartbeat"
 SCHEMA_VERSION = 1
 
 # Map legacy free-text error codes (kept for backward compat in `error: str`)
@@ -65,11 +63,11 @@ class ImageNatsAdapter(NatsAdapterBase):
         drain_timeout: float = 30.0,
     ) -> None:
         super().__init__(
-            subject=SUBJECT,
+            subject=SUBJECTS.image_request,
             queue_group="IMAGE_WORKERS",
             envelope_name="image",
             schema_version=SCHEMA_VERSION,
-            heartbeat_subject=HEARTBEAT_SUBJECT,
+            heartbeat_subject=SUBJECTS.image_heartbeat,
             heartbeat_interval=heartbeat_interval,
             drain_timeout=drain_timeout,
             inbox_prefix="_inbox.imagecli-image",
@@ -94,9 +92,7 @@ class ImageNatsAdapter(NatsAdapterBase):
             # Validate required fields and bounds
             valid, error = _validate_request(payload)
             if not valid:
-                await self._reply_error(
-                    msg, trace_id, request_id, "missing_required_field", error
-                )
+                await self._reply_error(msg, trace_id, request_id, "missing_required_field", error)
                 return
 
             engine_name = payload["engine"]
