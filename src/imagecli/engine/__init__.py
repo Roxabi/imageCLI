@@ -14,6 +14,7 @@ from .helpers import (
 )
 from .registry import (
     _get_registry,  # noqa: F401  # pyright: ignore[reportUnusedImport] — re-exported for existing callers (tests/test_engine.py)
+    UnknownEngineError,
     get_engine,
     list_engines,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "ImageEngine",
     "InsufficientResourcesError",
     "MIN_FREE_RAM_GB",
+    "UnknownEngineError",
     "get_compute_capability",
     "get_engine",
     "list_engines",

@@ -198,12 +198,14 @@ def _map_exception_to_error(exc: Exception) -> tuple[str, str]:
     Returns (error_code, error_detail). The error_detail is sanitized
     to avoid leaking paths, usernames, or internal structure.
     """
-    from imagecli.engine import InsufficientResourcesError
+    from imagecli.engine import InsufficientResourcesError, UnknownEngineError
 
     if isinstance(exc, InsufficientResourcesError):
         return "insufficient_resources", "Not enough VRAM or RAM to load engine"
-    if isinstance(exc, ValueError) and "Unknown engine" in str(exc):
-        return "unknown_engine", str(exc).split(": ", 1)[-1] if ": " in str(exc) else "unknown"
+    if isinstance(exc, UnknownEngineError):
+        msg = str(exc)
+        detail = msg.split(": ", 1)[-1] if ": " in msg else "unknown"
+        return "unknown_engine", detail
     if isinstance(exc, MemoryError):
         return "insufficient_resources", "Out of memory during generation"
 
