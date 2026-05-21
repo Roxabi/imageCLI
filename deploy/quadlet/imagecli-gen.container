@@ -19,13 +19,16 @@ Environment=HF_HOME=/home/imagecli/.cache/huggingface
 # PNG outputs (out/, nats_out/) — bind-mount so files land in ~/.roxabi/imagecli/
 # on the host, Syncthing-replicated M1<->M2 per project convention.
 Volume=%h/.roxabi/imagecli:/home/imagecli/.roxabi/imagecli
-Secret=imagecli-nats,type=mount,target=/home/imagecli/.config/imagecli/nkeys/seed.seed,mode=0400,uid=1503,gid=1503
+Secret=imagecli-nats-gen,type=mount,target=imagecli-nats-gen.seed,uid=1503,gid=1503,mode=0400
 AddDevice=nvidia.com/gpu=all
 # UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
 UserNS=keep-id:uid=1503,gid=1503
 # Big-bang NATS consolidation — connect to shared lyra-nats on roxabi.network.
 Environment=NATS_URL=nats://lyra-nats:4222
-Environment=NATS_NKEY_SEED_PATH=/home/imagecli/.config/imagecli/nkeys/seed.seed
+Environment=NATS_NKEY_SEED_PATH=/run/secrets/imagecli-nats-gen.seed
+# PuLID/InsightFace weights — read-only bind-mount (data managed by operator, not image).
+# Host data move ~/ComfyUI/models/pulid -> ~/.roxabi/imagecli/weights/ is Phase 1D operator action.
+Volume=%h/.roxabi/imagecli/weights:/home/imagecli/.roxabi/imagecli/weights:ro,Z
 # Engine override without rebuilding the image (see Dockerfile.gen CMD).
 Environment=IMAGECLI_ENGINE=flux2-klein
 HealthCmd=pgrep -f "imagecli nats-serve"
