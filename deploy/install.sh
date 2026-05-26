@@ -67,25 +67,25 @@ run mkdir -p \
     "${DATA_DIR}/weights" \
     "${DATA_DIR}/env" \
     "$(dirname "${SEED_PATH}")"
+run mkdir -p -m 700 "$(dirname "${SEED_PATH}")"
+run chmod 700 "$(dirname "${SEED_PATH}")"
 ok "Data dirs: ${DATA_DIR}/"
-info "Canonical nkeys path: ${SEED_PATH}"
+info "Canonical nkeys path: ${SEED_PATH} (see docs/QUADLET-DEPLOYMENT.md for lyra scp workflow)"
 
 # ── secrets ───────────────────────────────────────────────────────────────────
 info "Checking secret: ${SECRET_NAME}..."
 if podman secret inspect "${SECRET_NAME}" &>/dev/null; then
     ok "Secret ${SECRET_NAME} already exists"
+    [[ -f "${SEED_PATH}" ]] || echo "  warn  ${SEED_PATH} not found — secret may be stale; see docs/QUADLET-DEPLOYMENT.md rotation steps" >&2
 elif $DRY_RUN; then
-    echo "[dry-run] Would prompt to create secret: ${SECRET_NAME}"
+    echo "[dry-run] Would create secret from ${SEED_PATH}: ${SECRET_NAME}"
 else
-    echo "Secret '${SECRET_NAME}' not found."
-    echo "Options:"
-    echo "  1. Paste NKey seed (nk... prefix):"
-    echo "     echo 'SUANKEY...' | podman secret create ${SECRET_NAME} -"
-    echo "  2. Load from file:"
-    echo "     podman secret create ${SECRET_NAME} /path/to/seed.nk"
-    echo ""
-    echo "Create the secret then re-run this script."
-    exit 1
+    [[ -f "${SEED_PATH}" ]] || {
+        echo "error: seed file missing at ${SEED_PATH}" >&2
+        exit 1
+    }
+    podman secret create "${SECRET_NAME}" "${SEED_PATH}"
+    ok "Secret ${SECRET_NAME} created from ${SEED_PATH}"
 fi
 
 # ── env file ──────────────────────────────────────────────────────────────────
