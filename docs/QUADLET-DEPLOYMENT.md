@@ -20,6 +20,35 @@ bash deploy/install.sh
 
 Flags: `--dry-run` | `--secrets-only` | `--force`
 
+## Canonical nkeys path
+
+Lyra's `acl-matrix.json` (Roxabi/lyra#1381) scp's the regenerated NKey seed for `image-worker` to:
+
+```
+~/.roxabi/imagecli/nkeys/image-worker.seed
+```
+
+`deploy/install.sh` creates `~/.roxabi/imagecli/nkeys/` via `mkdir -p` and prints the resolved path at install time. Override with `IMAGECLI_SEED_PATH=/custom/path` if needed.
+
+**Operator workflow after `lyra-acl genkeys --regenerate`:**
+
+1. Lyra fires the external scp manifest — seed lands at `~/.roxabi/imagecli/nkeys/image-worker.seed` on `roxabitower`
+2. **Secure the seed** (mandatory — scp defaults to 644):
+   ```bash
+   chmod 400 ~/.roxabi/imagecli/nkeys/image-worker.seed
+   ```
+3. Recreate the Podman secret from the new seed:
+   ```bash
+   podman secret rm imagecli-nats-gen
+   podman secret create imagecli-nats-gen ~/.roxabi/imagecli/nkeys/image-worker.seed
+   ```
+4. Restart the service:
+   ```bash
+   systemctl --user restart imagecli-gen.service
+   ```
+
+Refs: Roxabi/lyra#1382, Roxabi/lyra#1381
+
 ## Secret Management
 
 ### Create secret (first install)
