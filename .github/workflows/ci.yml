@@ -21,7 +21,7 @@ jobs:
       - name: Typecheck
         run: uv run pyright
       - name: Shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh deploy/install.sh
       - name: Check lyra.* literals outside designated adapter
         run: bash scripts/check-lyra-literals.sh
       - name: Test

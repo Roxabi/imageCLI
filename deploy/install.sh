@@ -31,6 +31,10 @@ FORCE=false
 # Canonical nkeys path (aligns with lyra acl-matrix.json target_path for image-worker,
 # Roxabi/lyra#1381). Override via IMAGECLI_SEED_PATH env var if needed.
 SEED_PATH="${IMAGECLI_SEED_PATH:-${HOME}/.roxabi/imagecli/nkeys/image-worker.seed}"
+[[ "${SEED_PATH}" = /* ]] || {
+    echo "error: IMAGECLI_SEED_PATH must be an absolute path (got: ${SEED_PATH})" >&2
+    exit 1
+}
 
 # ── arg parsing ───────────────────────────────────────────────────────────────
 for arg in "$@"; do
