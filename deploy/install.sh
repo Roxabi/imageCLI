@@ -28,6 +28,10 @@ DRY_RUN=false
 SECRETS_ONLY=false
 FORCE=false
 
+# Canonical nkeys path (aligns with lyra acl-matrix.json target_path for image-worker,
+# Roxabi/lyra#1381). Override via IMAGECLI_SEED_PATH env var if needed.
+SEED_PATH="${IMAGECLI_SEED_PATH:-${HOME}/.roxabi/imagecli/nkeys/image-worker.seed}"
+
 # ── arg parsing ───────────────────────────────────────────────────────────────
 for arg in "$@"; do
     case "$arg" in
@@ -57,8 +61,10 @@ run mkdir -p \
     "${DATA_DIR}/out" \
     "${DATA_DIR}/nats_out" \
     "${DATA_DIR}/weights" \
-    "${DATA_DIR}/env"
+    "${DATA_DIR}/env" \
+    "$(dirname "${SEED_PATH}")"
 ok "Data dirs: ${DATA_DIR}/"
+info "Canonical nkeys path: ${SEED_PATH}"
 
 # ── secrets ───────────────────────────────────────────────────────────────────
 info "Checking secret: ${SECRET_NAME}..."
