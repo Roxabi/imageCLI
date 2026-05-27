@@ -415,6 +415,8 @@ async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_pa
 @pytest.fixture
 def mock_blob_store():
     """Mock BlobStore returning a canned BlobRef on put() (ADR-067)."""
+    from datetime import UTC, datetime
+
     from roxabi_blobs.models import BlobRef
 
     store = MagicMock()
@@ -424,6 +426,7 @@ def mock_blob_store():
         mime="image/png",
         size=68,
         source="imagecli",
+        created_at=datetime.now(tz=UTC),
     )
     store.put = AsyncMock(return_value=canned_ref)
     return store

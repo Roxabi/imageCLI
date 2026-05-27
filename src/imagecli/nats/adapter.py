@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from roxabi_blobs.protocol import BlobStore
+from roxabi_contracts.blob_ref import BlobRef as WireBlobRef
 from roxabi_contracts.errors import WorkerError
 from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
@@ -200,11 +201,18 @@ class ImageNatsAdapter(NatsAdapterBase):
             try:
                 image_bytes = saved_path.read_bytes()
                 mime = f"image/{fmt}"
-                blob_ref = await self._blob_store.put(
+                store_ref = await self._blob_store.put(
                     image_bytes,
                     mime=mime,
                     source="imagecli",
                     filename=f"{request_id or 'unknown'}.{fmt}",
+                )
+                # `roxabi_blobs.BlobRef` (store) and `roxabi_contracts.BlobRef`
+                # (wire) are sibling models — the wire variant is frozen +
+                # extra="forbid", so we strip the store-only fields (`id`,
+                # `is_sentinel`) before embedding into ImageResponse.
+                wire_blob_ref = WireBlobRef.model_validate(
+                    store_ref.model_dump(exclude={"id", "is_sentinel"})
                 )
 
                 resp = ImageResponse(
@@ -213,7 +221,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     issued_at=datetime.now(timezone.utc),
                     request_id=request_id,
                     ok=True,
-                    blob_ref=blob_ref,
+                    blob_ref=wire_blob_ref,
                     mime_type=mime,
                     width=width,
                     height=height,
