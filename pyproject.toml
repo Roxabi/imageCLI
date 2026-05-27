@@ -1,8 +1,8 @@
 [project]
 name = "imagecli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends"
-license = "MIT"
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "typer[all]>=0.12",
