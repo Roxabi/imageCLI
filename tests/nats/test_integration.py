@@ -489,6 +489,7 @@ async def test_handle_success_returns_blob_ref(
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
         patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
         patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
     ):
         await adapter_with_blob_store.handle(msg, payload)
@@ -527,6 +528,7 @@ async def test_handle_blobstore_put_failure_returns_delivery_failed(
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
         patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
         patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
     ):
         await adapter_with_blob_store.handle(msg, payload)
@@ -570,6 +572,7 @@ async def test_handle_reply_failure_after_put_returns_delivery_failed(
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
         patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
         patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
     ):
         await adapter_with_blob_store.handle(msg, payload)
