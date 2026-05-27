@@ -57,6 +57,9 @@ def mock_engine():
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
         )
         output_path.write_bytes(png_data)
+        # Adapter expects engine.generate to return the saved path so it can
+        # read the bytes back via saved_path.read_bytes() (#97 handle() flow).
+        return output_path
 
     engine.generate.side_effect = mock_generate
     engine.cleanup = MagicMock()
