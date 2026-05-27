@@ -22,6 +22,8 @@ dependencies = [
     "peft>=0.18.1",
     "roxabi-nats",
     "roxabi-contracts",
+    "roxabi-blobs",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -49,6 +51,7 @@ torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
 roxabi-nats = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-nats", branch = "staging" }
 roxabi-contracts = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-contracts", branch = "staging" }
+roxabi-blobs = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-blobs", branch = "staging" }
 
 [tool.uv]
 override-dependencies = [

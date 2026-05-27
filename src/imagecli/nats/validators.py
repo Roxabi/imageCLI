@@ -19,22 +19,23 @@ __all__ = [
     "_validate_request",
     "_resolve_loras",
     "_map_exception_to_error",
+    "_sanitize_delivery_exception",
 ]
 
 # Bounds validation constants
 MAX_IMAGE_DIMENSION = 4096
 MAX_STEPS = 200
 
-# Filesystem-safe character class for request_id — `request_id[:8]` is used as a
-# filename component in nats_output_dir, so anything outside this set could
-# escape the output directory (e.g. `request_id="a/../../b"` slices to "a/../../"
-# which `pathlib` treats as real path separators). Aligns with the contract's
-# `Annotated[str, StringConstraints(min_length=1)]` while pinning charset.
+# Filesystem-safe character class for request_id — `request_id` is passed as
+# the `filename` field on `BlobRef` (and historically as a path component in
+# the now-removed nats_output_dir helper). Keep the charset pinned so future
+# downstream consumers (filenames on disk, HTTP headers, etc.) get a safe
+# input. Aligns with the contract's `Annotated[str, StringConstraints(min_length=1)]`.
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # Allowlisted output formats — matches ImageRequest.format Literal in
-# roxabi_contracts.image.models. Same risk as request_id: fmt reaches the
-# filename in `nats_{id[:8]}.{fmt}`.
+# roxabi_contracts.image.models. Same defence-in-depth as request_id: fmt
+# reaches the `filename` field on BlobRef and downstream MIME mapping.
 ALLOWED_FORMATS = frozenset({"png", "jpeg", "webp"})
 
 # Allowlisted directories for LoRA and embedding paths
@@ -209,3 +210,40 @@ def _map_exception_to_error(exc: Exception) -> tuple[str, str]:
 
     # Generic fallback - don't leak internal details
     return "generation_failed", "Generation failed"
+
+
+def _sanitize_delivery_exception(exc: Exception) -> str:
+    """Map an httpx / BlobStore exception to a safe diagnostic string.
+
+    Sibling to :func:`_map_exception_to_error` — engine-side errors stay there,
+    delivery-side (HttpBlobStore) errors live here. The two stay separate
+    because their type domains are orthogonal (``httpx.*`` vs
+    ``imagecli.engine.*``).
+
+    The returned string is wire-facing (``WorkerError.detail``) AND log-facing
+    (``_probe_blobstore`` warning), so it MUST NOT carry URLs, headers, or any
+    string serialised from ``httpx.Request`` — those can embed the Bearer
+    token or query-string auth. We classify by ``isinstance`` only and never
+    interpolate ``exc`` directly.
+    """
+    # httpx is an optional transitive dep of roxabi-blobs.HttpBlobStore — lazy
+    # import so this helper stays usable even when httpx isn't installed
+    # (e.g., the legacy CLI path that never exercises the NATS adapter).
+    try:
+        import httpx
+    except ImportError:
+        return "internal delivery error"
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        # Narrowed by isinstance at runtime; httpx isn't statically typed here
+        # because of the lazy import.
+        status_code = exc.response.status_code  # type: ignore[attr-defined]
+        return f"upstream HTTP {status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "BlobStore request timed out"
+    if isinstance(exc, httpx.ConnectError):
+        return "BlobStore connection failed"
+    if isinstance(exc, httpx.HTTPError):
+        # Generic httpx parent — covers ProtocolError, RemoteProtocolError, etc.
+        return "BlobStore transport error"
+    return "internal delivery error"

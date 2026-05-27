@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+from typing import TYPE_CHECKING
+
 import typer
+
+if TYPE_CHECKING:
+    from roxabi_blobs.protocol import BlobStore
+
+log = logging.getLogger(__name__)
 
 _nats_app = typer.Typer(help="NATS subscriber for Lyra-driven image generation.")
 
@@ -14,6 +22,53 @@ def serve(
     from imagecli.daemon import daemon_main
 
     daemon_main(engine)
+
+
+def _init_blob_store() -> BlobStore:
+    """Instantiate HttpBlobStore from config (ADR-067, #97). Fail-fast on missing token.
+
+    Sources for the token (highest precedence first):
+      1. file at ``IMAGECLI_BLOBSTORE_TOKEN_PATH`` (Quadlet mount-type secret)
+      2. ``imagecli.toml [blobstore].token``
+      3. ``IMAGECLI_BLOBSTORE_TOKEN`` env var
+    Endpoint defaults to ``http://roxabituwer:8449`` (M₁ lyra-blobstore).
+    """
+    from imagecli.config import load_blobstore_config
+    from roxabi_blobs.http_store import HttpBlobStore
+
+    cfg = load_blobstore_config()
+    if cfg["token"] is None:
+        raise RuntimeError(
+            "blobstore token not configured — mount the Quadlet secret "
+            "'imagecli-blobstore-token' (with IMAGECLI_BLOBSTORE_TOKEN_PATH set to its mount), "
+            "or set imagecli.toml [blobstore].token, or IMAGECLI_BLOBSTORE_TOKEN env var."
+        )
+    return HttpBlobStore(base_url=cfg["endpoint"], token=cfg["token"])
+
+
+async def _probe_blobstore(endpoint: str) -> None:
+    """Best-effort startup connectivity check. Warn on failure, never raise."""
+    import httpx
+
+    from imagecli.nats.validators import _sanitize_delivery_exception
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{endpoint}/healthz")
+            if resp.status_code >= 400:
+                log.warning(
+                    "HttpBlobStore probe: %s/healthz returned %s — first put() may fail",
+                    endpoint,
+                    resp.status_code,
+                )
+    except Exception as exc:  # noqa: BLE001 — probe is best-effort, must not raise
+        # Sanitize: httpx exception strings can carry URLs / auth context. Endpoint
+        # is operator-set and safe to log; exc class is conveyed via the helper.
+        log.warning(
+            "HttpBlobStore probe failed for %s: %s — first put() may fail",
+            endpoint,
+            _sanitize_delivery_exception(exc),
+        )
 
 
 @_nats_app.command("image")
@@ -28,9 +83,17 @@ def nats_serve(
     """Start NATS subscriber for image generation requests."""
     import asyncio
 
+    from imagecli.config import load_blobstore_config
     from imagecli.nats import ImageNatsAdapter
 
-    adapter = ImageNatsAdapter(default_engine=engine)
+    # ADR-067 (#97): instantiate the cross-host BlobStore, run the warn-only
+    # connectivity probe, then wire the store into the adapter so handle()
+    # emits ImageResponse.blob_ref instead of inline bytes.
+    blob_store = _init_blob_store()
+    cfg = load_blobstore_config()
+    asyncio.run(_probe_blobstore(cfg["endpoint"]))
+
+    adapter = ImageNatsAdapter(default_engine=engine, blob_store=blob_store)
     try:
         asyncio.run(adapter.run(nats_url=nats_url))
     except KeyboardInterrupt:

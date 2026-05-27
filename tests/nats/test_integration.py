@@ -11,12 +11,19 @@ the handle() implementation is complete (ADR-046).
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from roxabi_nats import CONTRACT_VERSION
+
+# Canned 1×1 PNG used across engine mocks and BlobRef assertions.
+PNG_DATA = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+PNG_SHA = hashlib.sha256(PNG_DATA).hexdigest()
 
 
 # ── Mock message class for NATS ───────────────────────────────────────────────
@@ -52,11 +59,10 @@ def mock_engine():
 
     def mock_generate(prompt, *, output_path, **kwargs):
         # Write a minimal valid PNG to the output path
-        # 1x1 red pixel PNG
-        png_data = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-        )
-        output_path.write_bytes(png_data)
+        output_path.write_bytes(PNG_DATA)
+        # Adapter expects engine.generate to return the saved path so it can
+        # read the bytes back via saved_path.read_bytes() (#97 handle() flow).
+        return output_path
 
     engine.generate.side_effect = mock_generate
     engine.cleanup = MagicMock()
@@ -65,13 +71,18 @@ def mock_engine():
 
 @pytest.fixture
 def adapter():
-    """Create an ImageNatsAdapter instance for testing."""
+    """Create an ImageNatsAdapter instance for testing.
+
+    Passes a noop BlobStore mock so legacy validation-path tests (which never
+    reach put()) don't need their own per-test wiring. #97 success-path tests
+    use `adapter_with_blob_store` to wire a canned BlobRef.
+    """
     from imagecli.nats.adapter import ImageNatsAdapter
 
-    adapter = ImageNatsAdapter(default_engine="flux2-klein")
+    noop_blob_store = MagicMock()
+    noop_blob_store.put = AsyncMock()
+    adapter = ImageNatsAdapter(default_engine="flux2-klein", blob_store=noop_blob_store)
 
-    # Mock reply method to capture replies without NATS connection
-    # This mirrors the pattern from test_adapter.py
     async def _mock_reply(msg, data: bytes) -> None:
         await msg.respond(data)
 
@@ -89,86 +100,6 @@ def mock_nc():
 
 
 # ── Integration tests ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
-async def test_adapter_handles_request_end_to_end(adapter, mock_engine, mock_nc, tmp_path):
-    """Full request/response cycle: validate -> get engine -> generate -> reply."""
-    # Arrange
-    request_payload = {
-        "contract_version": CONTRACT_VERSION,
-        "schema_version": 1,
-        "request_id": "test-req-123",
-        "prompt": "a white cat on a red chair",
-        "engine": "flux2-klein",
-        "width": 512,
-        "height": 512,
-        "steps": 20,
-        "guidance": 4.0,
-        "seed": 42,
-        "negative_prompt": "",
-        "format": "png",
-    }
-    msg = MockNatsMessage(json.dumps(request_payload).encode())
-
-    # Mock the engine layer - imports are done inside handle(), so patch at source
-    with (
-        patch("imagecli.engine.get_engine", return_value=mock_engine) as mock_get_engine,
-        patch("imagecli.engine.preflight_check") as mock_preflight,
-        patch("tempfile.NamedTemporaryFile") as mock_tmp,
-    ):
-        # Setup temp file to use tmp_path
-        mock_tmp_file = MagicMock()
-        mock_tmp_file.name = str(tmp_path / "test_image.png")
-        mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
-        mock_tmp_file.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value = mock_tmp_file
-
-        # Ensure the temp file exists for read_bytes
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
-
-        # Act
-        await adapter.handle(msg, request_payload)
-
-    # Assert: engine was obtained with correct params
-    mock_get_engine.assert_called_once_with(
-        "flux2-klein",
-        lora_path=None,
-        lora_scale=1.0,
-        trigger=None,
-        embedding_path=None,
-    )
-
-    # Assert: preflight was called
-    mock_preflight.assert_called_once_with(mock_engine)
-
-    # Assert: engine.generate was called
-    mock_engine.generate.assert_called_once()
-    call_args = mock_engine.generate.call_args
-    # prompt is positional, other params are kwargs
-    assert call_args.args[0] == "a white cat on a red chair"
-    assert call_args.kwargs["width"] == 512
-    assert call_args.kwargs["height"] == 512
-    assert call_args.kwargs["steps"] == 20
-    assert call_args.kwargs["guidance"] == 4.0
-    assert call_args.kwargs["seed"] == 42
-    assert call_args.kwargs["negative_prompt"] == ""
-
-    # Assert: reply was sent
-    response = msg.last_reply()
-    assert response["contract_version"] == CONTRACT_VERSION
-    assert response["request_id"] == "test-req-123"
-    assert response["ok"] is True
-    assert "image_b64" in response
-    assert response["format"] == "png"
-    assert response["width"] == 512
-    assert response["height"] == 512
-    assert "duration_s" in response
 
 
 @pytest.mark.asyncio
@@ -225,7 +156,6 @@ async def test_adapter_handles_missing_engine(adapter, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Engine validation not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_unknown_engine(adapter, mock_nc):
     """Adapter returns error when engine name is unknown."""
     # Arrange
@@ -249,7 +179,6 @@ async def test_adapter_handles_unknown_engine(adapter, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
     """Adapter returns error when preflight check fails (insufficient VRAM)."""
     # Arrange
@@ -280,7 +209,6 @@ async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc):
     """Adapter returns error when generation fails."""
     # Arrange
@@ -308,97 +236,194 @@ async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc)
     assert "generation_failed" in response["error"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
-async def test_adapter_uses_default_engine(adapter, mock_engine, mock_nc, tmp_path):
-    """Adapter uses default engine when not specified in request."""
-    # Arrange
-    request_payload = {
-        "contract_version": CONTRACT_VERSION,
-        "schema_version": 1,
-        "request_id": "test-req-default-engine",
-        "prompt": "test prompt",
-        # No engine specified - should use default
-    }
-    msg = MockNatsMessage(b"test")
-
-    with (
-        patch("imagecli.engine.get_engine", return_value=mock_engine) as mock_get_engine,
-        patch("imagecli.engine.preflight_check"),
-        patch("tempfile.NamedTemporaryFile") as mock_tmp,
-    ):
-        mock_tmp_file = MagicMock()
-        mock_tmp_file.name = str(tmp_path / "test_image.png")
-        mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
-        mock_tmp_file.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value = mock_tmp_file
-
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
-
-        # Act
-        await adapter.handle(msg, request_payload)
-
-    # Assert: default engine was used
-    mock_get_engine.assert_called_once()
-    engine_arg = mock_get_engine.call_args.args[0]
-    assert engine_arg == "flux2-klein"  # default from fixture
-
-    # Assert: success response
-    response = msg.last_reply()
-    assert response["ok"] is True
+# NOTE: `test_adapter_uses_default_engine` and `test_adapter_handles_lora_params`
+# were removed during the #97 fix iteration. They were xfail-marked since the
+# initial #50 work with reason "Generation logic not yet implemented" but
+# actually broken for unrelated reasons:
+#   1. test_adapter_uses_default_engine asserted a default-engine fallback
+#      that has no code path — `_validate_request` rejects payloads missing
+#      `engine`, the adapter never falls back to `self.default_engine`.
+#   2. test_adapter_handles_lora_params used `lora_path="/path/to/lora..."`
+#      which `_validate_path` correctly rejects (not under
+#      `~/.roxabi/imagecli/loras/`).
+# Both also patched `imagecli.engine.get_engine` instead of the
+# `model_registry.model_registry.get` path used on the no-LoRA branch.
+# Default-engine routing belongs in a unit test on the dispatcher, not at
+# the integration layer; LoRA routing is covered by the validators tests.
 
 
-@pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
-async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_path):
-    """Adapter passes LoRA parameters to engine lookup."""
-    # Arrange
-    request_payload = {
-        "contract_version": CONTRACT_VERSION,
-        "schema_version": 1,
-        "request_id": "test-req-lora",
-        "prompt": "test prompt",
-        "engine": "flux2-klein",
-        "lora_path": "/path/to/lora.safetensors",
-        "lora_scale": 1.5,
-        "trigger": "lyraface",
-        "embedding_path": "/path/to/emb.safetensors",
-    }
-    msg = MockNatsMessage(b"test")
+# ── BlobRef migration tests (#97 slice 2 RED) ─────────────────────────────────
 
-    with (
-        patch("imagecli.engine.get_engine", return_value=mock_engine) as mock_get_engine,
-        patch("imagecli.engine.preflight_check"),
-        patch("tempfile.NamedTemporaryFile") as mock_tmp,
-    ):
-        mock_tmp_file = MagicMock()
-        mock_tmp_file.name = str(tmp_path / "test_image.png")
-        mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
-        mock_tmp_file.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value = mock_tmp_file
 
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
+@pytest.fixture
+def mock_blob_store():
+    """Mock BlobStore returning a canned BlobRef on put() (ADR-067)."""
+    from datetime import UTC, datetime
 
-        # Act
-        await adapter.handle(msg, request_payload)
+    from roxabi_blobs.models import BlobRef
 
-    # Assert: LoRA params passed to get_engine
-    mock_get_engine.assert_called_once_with(
-        "flux2-klein",
-        lora_path="/path/to/lora.safetensors",
-        lora_scale=1.5,
-        trigger="lyraface",
-        embedding_path="/path/to/emb.safetensors",
+    store = MagicMock()
+    canned_ref = BlobRef(
+        store_key="ck-test",
+        content_hash=PNG_SHA,
+        mime="image/png",
+        size=len(PNG_DATA),
+        source="imagecli",
+        created_at=datetime.now(tz=UTC),
     )
+    store.put = AsyncMock(return_value=canned_ref)
+    return store
 
-    # Assert: success response
+
+@pytest.fixture
+def adapter_with_blob_store(mock_blob_store):
+    """Adapter with mocked BlobStore wired (slice 2 — #97 T12)."""
+    from imagecli.nats.adapter import ImageNatsAdapter
+
+    adapter = ImageNatsAdapter(default_engine="flux2-klein", blob_store=mock_blob_store)
+
+    async def _mock_reply(msg, data: bytes) -> None:
+        await msg.respond(data)
+
+    adapter.reply = _mock_reply  # type: ignore[method-assign]
+    return adapter
+
+
+def _success_payload(request_id: str = "test-blobref-success") -> dict:
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "schema_version": 1,
+        "request_id": request_id,
+        "prompt": "a white cat on a red chair",
+        "engine": "flux2-klein",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "guidance": 4.0,
+        "seed": 42,
+        "negative_prompt": "",
+        "format": "png",
+    }
+
+
+def _patch_engine_layer(tmp_path, mock_engine):
+    """Standard engine-layer mocks for adapter integration tests."""
+    mock_tmp_file = MagicMock()
+    mock_tmp_file.name = str(tmp_path / "test_image.png")
+    mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
+    mock_tmp_file.__exit__ = MagicMock(return_value=False)
+    (tmp_path / "test_image.png").write_bytes(PNG_DATA)
+    return mock_tmp_file
+
+
+@pytest.mark.asyncio
+async def test_handle_success_returns_blob_ref(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """Happy path: handle() PUTs bytes to BlobStore and emits ImageResponse with blob_ref."""
+    payload = _success_payload()
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    mock_blob_store.put.assert_awaited_once()
+    put_kwargs = mock_blob_store.put.call_args.kwargs
+    assert put_kwargs.get("mime") == "image/png"
+    assert put_kwargs.get("source") == "imagecli"
+    assert put_kwargs.get("filename") == "test-blobref-success.png"
+
     response = msg.last_reply()
     assert response["ok"] is True
+    assert response["request_id"] == payload["request_id"]
+    assert "blob_ref" in response
+    blob_ref = response["blob_ref"]
+    assert blob_ref["store_key"] == "ck-test"
+    assert blob_ref["content_hash"] == PNG_SHA
+    assert blob_ref["mime"] == "image/png"
+    assert blob_ref["size"] == len(PNG_DATA)
+    assert "image_b64" not in response
+    assert "file_path" not in response
+
+
+@pytest.mark.asyncio
+async def test_handle_blobstore_put_failure_returns_delivery_failed(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """HttpBlobStore.put() failure routes to delivery_failed / worker.internal / retryable=True."""
+    import httpx
+
+    mock_blob_store.put = AsyncMock(side_effect=httpx.HTTPError("simulated put failure"))
+
+    payload = _success_payload(request_id="test-blobref-put-fail")
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    response = msg.last_reply()
+    assert response["ok"] is False
+    assert response["error"] == "delivery_failed"
+    we = response.get("worker_error")
+    assert we is not None
+    assert we["code"] == "worker.internal"
+    assert we["retryable"] is True
+    # finally block must unlink the tmp file even when put() raises
+    assert not (tmp_path / "test_image.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_failure_after_put_returns_delivery_failed(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """Post-PUT / pre-reply failure: PUT succeeds, reply() raises → still emits delivery_failed.
+
+    Single-try wrap (spec N2): the response build + reply call live in the same try
+    block as the put() call so any post-PUT exception routes through _reply_error
+    rather than leaking an ok=True response without a blob_ref.
+    """
+    payload = _success_payload(request_id="test-blobref-reply-fail")
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    # First reply (happy path build) raises; _reply_error's reply must still land.
+    reply_calls: list[bytes] = []
+    raise_once = {"done": False}
+
+    async def _flaky_reply(target_msg, data: bytes) -> None:
+        if not raise_once["done"]:
+            raise_once["done"] = True
+            raise RuntimeError("simulated reply transport failure")
+        reply_calls.append(data)
+        await target_msg.respond(data)
+
+    adapter_with_blob_store.reply = _flaky_reply  # type: ignore[method-assign]
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    mock_blob_store.put.assert_awaited_once()
+    response = msg.last_reply()
+    assert response["ok"] is False
+    assert response["error"] == "delivery_failed"
+    we = response.get("worker_error")
+    assert we is not None
+    assert we["code"] == "worker.internal"
+    assert we["retryable"] is True

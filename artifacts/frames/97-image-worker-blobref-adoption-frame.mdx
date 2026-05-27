@@ -1,0 +1,65 @@
+---
+title: image-worker BlobRef adoption (lyra #1061 V6 imageCLI mirror)
+issue: 97
+status: approved
+tier: F-lite
+date: 2026-05-27
+---
+
+## Problem
+
+The imageCLI image-worker on M₂ currently produces `ImageResponse` payloads carrying inline bytes (`image_b64`) or filesystem paths (`file_path`). Upstream `roxabi-contracts` shipped V2 on 2026-05-22 (`lyra#1064`): both fields were **atomically removed** in favor of `blob_ref: BlobRef`. The local `uv.lock` is pinned to commit `e99cc6a` (2026-05-21, pre-V2), so the worker still builds at runtime — but the moment `uv sync --upgrade` re-resolves `branch=staging`, `src/imagecli/nats/adapter.py:239-240` will fail Pydantic validation (`ImageResponse` no longer accepts those kwargs, and `ok=True` now requires `blob_ref` non-null).
+
+The hard cross-host blocker (`lyra#1330` — `HttpBlobStore` HTTP-fronted service) closed on 2026-05-25. M₂ can now reach M₁'s BlobStore over tailnet via an `HttpBlobStore` client. The work is no longer "atomic landing with lyra#1064" (that already shipped); it is **catch-up** to a contract surface that's already V2 upstream.
+
+Observable impact today: the worker is **functionally frozen** at its pinned `roxabi-contracts` revision. Any unrelated update to other lyra workspace packages (e.g. `roxabi-nats`) that requires a newer `roxabi-contracts` will force the migration. Holding the pin is a slow-burn debt, not a stable state.
+
+## Who
+
+- **Primary:** the imageCLI image-worker process (M₂ `image-worker` role, Quadlet `imagecli-gen.container` — currently `.disabled` but revivable on-demand). It builds + sends `ImageResponse` over NATS.
+- **Secondary:** the lyra hub on M₁ (consumer of `ImageResponse`, now expects `blob_ref`); the `HttpBlobStore` service on M₁ (`lyra-blobstore.container`); operators who run `uv sync --upgrade` across the workspace.
+
+## Constraints
+
+- **Atomic body update:** drop `image_b64`/`file_path` from the worker's response surface in the **same commit** as the `roxabi-contracts` pin bump. No `DeprecationWarning` shim — upstream rejected shims (per `lyra#1064` body).
+- **Cross-host transport:** M₂ image-worker is not on the same host as the BlobStore filesystem → must use `HttpBlobStore` (HTTP client over tailnet to M₁), not `FsBlobStore`.
+- **Auth + endpoint config:** `HttpBlobStore` needs a base URL and Bearer token. Surface via `imagecli.toml` and/or env vars; route through existing config layering (CLI > frontmatter > toml > default).
+- **Payload size:** single `put(bytes)` is acceptable for default 1024² PNG (≤5 MB typical). Streaming `put_multipart()` (`lyra#1334`, OPEN P3-low) is deferred until either #1334 lands or empirical sizes exceed ~10 MB.
+- **No CLI surface impact:** `imagecli generate`/`batch` write to `~/.roxabi/imagecli/out/` locally; only the **NATS adapter** path produces `BlobRef`. Local CLI output stays inline.
+- **Atomic partner (soft):** `lyra#1308` is the lyra-side ImageClient mirror (consumes `blob_ref` from this worker, still OPEN, blocked by streaming/Discord which are not on imageCLI's critical path). Land independently OR coordinate; not a hard atomic requirement since contracts already accept `BlobRef`.
+
+## Out of Scope
+
+- Streaming/multipart upload (`HttpBlobStore.put_multipart()`) — deferred to `lyra#1334`.
+- Discord eager-ingest flow (`lyra#1066`).
+- Stage-axis decomposition pattern (`lyra#1277`) — lyra-internal refactor.
+- Local CLI output path (`imagecli generate` / `batch` writing to `~/.roxabi/imagecli/out/`). Only the NATS adapter is migrated.
+- voiceCLI mirror (`voiceCLI#144`) — parallel sister ticket, separate repo.
+- BlobStore retention / TTL policy — owned by lyra side, configured server-side.
+
+## Premise Validity
+
+**Success in 6 months:**
+Image worker runs on the latest `roxabi-contracts` (no pin-lag), produces `ImageResponse(blob_ref=…)` via `HttpBlobStore` for every generated image, and `image_b64`/`file_path` no longer appear anywhere in `src/imagecli/nats/`. Lyra hub consumes image responses via `BlobRef` end-to-end. Zero inline-bytes paths remain in the imageCLI NATS worker.
+
+**Failure in 6 months (falsifiable):**
+By 2026-11-27, **any of** the following observable conditions holds → premise invalidated:
+- `uv.lock` still pins `roxabi-contracts` to commit `e99cc6a` (pre-V2) — migration deferred indefinitely;
+- `grep -rE "image_b64|file_path" src/imagecli/nats/` returns >0 matches in non-test code;
+- Image-worker generation→delivery p95 latency through `HttpBlobStore` is >2× the pre-V2 inline-bytes baseline (measured on M₂→M₁ over tailnet), making the worker unusable for interactive Lyra chat flows.
+
+**Simplest alternative:**
+Pin `roxabi-contracts` permanently at `e99cc6a` (pre-V2), never adopt `BlobRef`, keep emitting `image_b64`/`file_path`.
+**Why not enough:**
+Lyra hub and `voiceCLI` are moving to V2; `roxabi-contracts` is a shared monorepo dep, so other lyra packages will eventually require a newer pin (e.g. `roxabi-nats` updates). Keeping the pre-V2 pin creates an increasingly stale fork-in-place: security patches and unrelated features stop landing, and the worker becomes incompatible with the rest of the ecosystem (50 MB NATS payload cap, no dedup, full-payload fanout to all subscribers — the original `lyra#1061` problem statement). Cost of maintaining the divergence > cost of the catch-up migration.
+
+## Complexity
+
+**Tier: F-lite** — single domain (NATS adapter response surface), clear scope, one new dep (`roxabi-blobs`), one pin bump (`roxabi-contracts`), one config addition (HttpBlobStore endpoint + auth).
+
+Signals observed:
+- Issue label `size:F-lite` (operator-set, ratified by interview).
+- Single touched module: `src/imagecli/nats/adapter.py` + `pyproject.toml` + `uv.lock` + likely a small `config.py` addition + tests.
+- No new architecture: leverages an existing upstream client (`HttpBlobStore`) and existing contract types (`BlobRef`).
+- Cross-repo coordination is **soft** (lyra contracts already shipped; lyra mirror `#1308` can land independently).
+- Visible risks: HttpBlobStore endpoint/auth config plumbing, error-path mapping (what does the worker emit when `HttpBlobStore.put()` fails — `ImageResponse(ok=False, error=…)`?), removal of the existing in-memory `image_b64` size guard (currently caps at 750_000 chars in `adapter.py`).

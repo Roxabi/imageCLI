@@ -25,7 +25,7 @@ Python 3.12 via `uv` · Typer+Rich · PyTorch 2.11+ cu130 · ruff (L≤100, py31
 imagecli.example.toml     — copy → ~/imagecli.toml
 images/
   prompts_in/             — .md prompts (git-tracked)
-                           — generated images go to ~/.roxabi/imagecli/{out,nats_out}/, ¬in repo
+                           — generated images go to ~/.roxabi/imagecli/out/, ¬in repo
 src/imagecli/
   cli.py                  — Typer app: generate, batch, engines, info
   config.py               — TOML loader (walks CWD → $HOME)
@@ -81,6 +81,8 @@ Prompt text. Can be multi-paragraph.
 `imagecli.toml` searched CWD → `$HOME`. Global: `~/imagecli.toml`.
 Priority: CLI flag > frontmatter > imagecli.toml > default.
 
+`[blobstore]` stanza (NATS worker only, #97): `endpoint` + `token` for the cross-host HttpBlobStore (M₂ → M₁ lyra-blobstore on port 8449). Server-config precedence: `imagecli.toml [blobstore]` > env (`IMAGECLI_BLOBSTORE_URL`, `IMAGECLI_BLOBSTORE_TOKEN`) > default (`http://roxabituwer:8449`, no token). Missing token → fail-fast at adapter init. Production: token via Quadlet secret `imagecli-blobstore-token`.
+
 ## flux2-klein auto-mode
 
 | Command | Mode | Peak VRAM | Compile |
@@ -131,7 +133,7 @@ Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
 
 ## Container Deployment
 
-imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`image-worker` role). Deploy with `bash deploy/install.sh` (idempotent, supports `--dry-run`). Requires secret `imagecli-nats-gen` (NATS NKey seed) and Phase 1D operator data move (`~/ComfyUI/models/pulid` → `~/.roxabi/imagecli/weights/pulid`). UID 1503 fixed in image.
+imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`image-worker` role). Deploy with `bash deploy/install.sh` (idempotent, supports `--dry-run`). Requires secrets `imagecli-nats-gen` (NATS NKey seed) and `imagecli-blobstore-token` (Bearer for cross-host HttpBlobStore, #97), plus Phase 1D operator data move (`~/ComfyUI/models/pulid` → `~/.roxabi/imagecli/weights/pulid`). UID 1503 fixed in image.
 
 → `docs/QUADLET-DEPLOYMENT.md` — install runbook, secret rotation, diagnostics, Phase 1D operator actions.
 
@@ -139,4 +141,4 @@ imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`ima
 
 - ¬over-engineering — thin flat CLI
 - Heavy imports (torch, diffusers) deferred to engine `_load()`
-- Output → `~/.roxabi/imagecli/out/` default (CLI), `~/.roxabi/imagecli/nats_out/` (NATS satellite); both Syncthing-replicated M₁↔M₂ · prompts → `images/prompts_in/` (git-tracked)
+- Output → `~/.roxabi/imagecli/out/` (CLI, Syncthing-replicated M₁↔M₂); NATS satellite delivers via HttpBlobStore (no local FS write since #97) · prompts → `images/prompts_in/` (git-tracked)

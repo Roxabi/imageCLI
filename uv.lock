@@ -32,6 +32,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
+]
+
+[[package]]
 name = "albucore"
 version = "0.0.24"
 source = { registry = "https://pypi.org/simple" }
@@ -599,7 +608,7 @@ wheels = [
 
 [[package]]
 name = "imagecli"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -607,10 +616,12 @@ dependencies = [
     { name = "einops" },
     { name = "facexlib" },
     { name = "gguf" },
+    { name = "httpx" },
     { name = "optimum", extra = ["quanto"] },
     { name = "peft" },
     { name = "pillow" },
     { name = "protobuf" },
+    { name = "roxabi-blobs" },
     { name = "roxabi-contracts" },
     { name = "roxabi-nats" },
     { name = "sentencepiece" },
@@ -654,10 +665,12 @@ requires-dist = [
     { name = "einops", specifier = ">=0.8.2" },
     { name = "facexlib", specifier = ">=0.3.0" },
     { name = "gguf", specifier = ">=0.18.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "optimum", extras = ["quanto"], specifier = ">=1.24" },
     { name = "peft", specifier = ">=0.18.1" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", specifier = ">=5.0" },
+    { name = "roxabi-blobs", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&branch=staging" },
     { name = "roxabi-contracts", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging" },
     { name = "roxabi-nats", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging" },
     { name = "sentencepiece", specifier = ">=0.2.1" },
@@ -1684,9 +1697,18 @@ wheels = [
 ]
 
 [[package]]
+name = "roxabi-blobs"
+version = "0.1.1"
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "roxabi-contracts"
 version = "0.4.0"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -1694,7 +1716,7 @@ dependencies = [
 [[package]]
 name = "roxabi-nats"
 version = "0.4.1"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
 dependencies = [
     { name = "nats-py" },
     { name = "nkeys" },

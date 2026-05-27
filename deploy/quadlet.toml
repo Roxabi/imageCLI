@@ -4,6 +4,6 @@ uid = 1503
 
 [component.gen]
 container = "imagecli-gen.container"
-required_secrets = ["imagecli-nats-gen"]
+required_secrets = ["imagecli-nats-gen", "imagecli-blobstore-token"]
 env_file = "~/.roxabi/imagecli/env/gen.env"
 host_roles = ["image-worker"]
