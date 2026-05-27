@@ -16,16 +16,23 @@ Network=roxabi.network
 Volume=%h/.cache/huggingface:/home/imagecli/.cache/huggingface
 # Explicit HF_HOME guards against XDG_CACHE_HOME quirks inside the container.
 Environment=HF_HOME=/home/imagecli/.cache/huggingface
-# PNG outputs (out/, nats_out/) — bind-mount so files land in ~/.roxabi/imagecli/
+# PNG outputs (out/) — bind-mount so CLI-generated files land in ~/.roxabi/imagecli/
 # on the host, Syncthing-replicated M1<->M2 per project convention.
+# NATS satellite delivers via HttpBlobStore (no local FS write since #97).
 Volume=%h/.roxabi/imagecli:/home/imagecli/.roxabi/imagecli
 Secret=imagecli-nats-gen,type=mount,target=imagecli-nats-gen.seed,uid=1503,gid=1503,mode=0400
+# Cross-host HttpBlobStore Bearer token (#97 / ADR-067). Mount-type secret —
+# value never appears in `podman inspect --format '{{.Config.Env}}'`. Python
+# reads the file at IMAGECLI_BLOBSTORE_TOKEN_PATH.
+Secret=imagecli-blobstore-token,type=mount,target=imagecli-blobstore-token,uid=1503,gid=1503,mode=0400
 AddDevice=nvidia.com/gpu=all
 # UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
 UserNS=keep-id:uid=1503,gid=1503
 # Big-bang NATS consolidation — connect to shared lyra-nats on roxabi.network.
 Environment=NATS_URL=nats://lyra-nats:4222
 Environment=NATS_NKEY_SEED_PATH=/run/secrets/imagecli-nats-gen.seed
+Environment=IMAGECLI_BLOBSTORE_TOKEN_PATH=/run/secrets/imagecli-blobstore-token
+Environment=IMAGECLI_BLOBSTORE_URL=http://roxabituwer:8449
 # PuLID/InsightFace weights — read-only bind-mount (data managed by operator, not image).
 # Host data move ~/ComfyUI/models/pulid -> ~/.roxabi/imagecli/weights/ is Phase 1D operator action.
 Volume=%h/.roxabi/imagecli/weights:/home/imagecli/.roxabi/imagecli/weights:ro,Z

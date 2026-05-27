@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from roxabi_blobs.protocol import BlobStore
 
 log = logging.getLogger(__name__)
 
@@ -20,12 +24,14 @@ def serve(
     daemon_main(engine)
 
 
-def _init_blob_store() -> object:
+def _init_blob_store() -> BlobStore:
     """Instantiate HttpBlobStore from config (ADR-067, #97). Fail-fast on missing token.
 
-    Returns the store as ``object`` to avoid leaking the roxabi_blobs import into
-    callers that may not need it yet. Slice 1 of #97 only instantiates and probes;
-    slice 2 wires the store into ``ImageNatsAdapter``.
+    Sources for the token (highest precedence first):
+      1. file at ``IMAGECLI_BLOBSTORE_TOKEN_PATH`` (Quadlet mount-type secret)
+      2. ``imagecli.toml [blobstore].token``
+      3. ``IMAGECLI_BLOBSTORE_TOKEN`` env var
+    Endpoint defaults to ``http://roxabituwer:8449`` (M₁ lyra-blobstore).
     """
     from imagecli.config import load_blobstore_config
     from roxabi_blobs.http_store import HttpBlobStore
@@ -33,18 +39,18 @@ def _init_blob_store() -> object:
     cfg = load_blobstore_config()
     if cfg["token"] is None:
         raise RuntimeError(
-            "blobstore token not configured — set imagecli.toml [blobstore].token, "
-            "IMAGECLI_BLOBSTORE_TOKEN env var, or mount the Quadlet secret "
-            "'imagecli-blobstore-token'."
+            "blobstore token not configured — mount the Quadlet secret "
+            "'imagecli-blobstore-token' (with IMAGECLI_BLOBSTORE_TOKEN_PATH set to its mount), "
+            "or set imagecli.toml [blobstore].token, or IMAGECLI_BLOBSTORE_TOKEN env var."
         )
-    endpoint = cfg["endpoint"]
-    assert endpoint is not None  # load_blobstore_config guarantees a default
-    return HttpBlobStore(base_url=endpoint, token=cfg["token"])
+    return HttpBlobStore(base_url=cfg["endpoint"], token=cfg["token"])
 
 
 async def _probe_blobstore(endpoint: str) -> None:
     """Best-effort startup connectivity check. Warn on failure, never raise."""
     import httpx
+
+    from imagecli.nats.validators import _sanitize_delivery_exception
 
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
@@ -56,10 +62,12 @@ async def _probe_blobstore(endpoint: str) -> None:
                     resp.status_code,
                 )
     except Exception as exc:  # noqa: BLE001 — probe is best-effort, must not raise
+        # Sanitize: httpx exception strings can carry URLs / auth context. Endpoint
+        # is operator-set and safe to log; exc class is conveyed via the helper.
         log.warning(
             "HttpBlobStore probe failed for %s: %s — first put() may fail",
             endpoint,
-            exc,
+            _sanitize_delivery_exception(exc),
         )
 
 
@@ -83,13 +91,8 @@ def nats_serve(
     # emits ImageResponse.blob_ref instead of inline bytes.
     blob_store = _init_blob_store()
     cfg = load_blobstore_config()
-    endpoint = cfg["endpoint"]
-    assert endpoint is not None
-    asyncio.run(_probe_blobstore(endpoint))
+    asyncio.run(_probe_blobstore(cfg["endpoint"]))
 
-    from roxabi_blobs.protocol import BlobStore as _BlobStoreProtocol
-
-    assert isinstance(blob_store, _BlobStoreProtocol)
     adapter = ImageNatsAdapter(default_engine=engine, blob_store=blob_store)
     try:
         asyncio.run(adapter.run(nats_url=nats_url))

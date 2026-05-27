@@ -11,12 +11,19 @@ the handle() implementation is complete (ADR-046).
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from roxabi_nats import CONTRACT_VERSION
+
+# Canned 1×1 PNG used across engine mocks and BlobRef assertions.
+PNG_DATA = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+PNG_SHA = hashlib.sha256(PNG_DATA).hexdigest()
 
 
 # ── Mock message class for NATS ───────────────────────────────────────────────
@@ -52,11 +59,7 @@ def mock_engine():
 
     def mock_generate(prompt, *, output_path, **kwargs):
         # Write a minimal valid PNG to the output path
-        # 1x1 red pixel PNG
-        png_data = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-        )
-        output_path.write_bytes(png_data)
+        output_path.write_bytes(PNG_DATA)
         # Adapter expects engine.generate to return the saved path so it can
         # read the bytes back via saved_path.read_bytes() (#97 handle() flow).
         return output_path
@@ -97,86 +100,6 @@ def mock_nc():
 
 
 # ── Integration tests ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
-async def test_adapter_handles_request_end_to_end(adapter, mock_engine, mock_nc, tmp_path):
-    """Full request/response cycle: validate -> get engine -> generate -> reply."""
-    # Arrange
-    request_payload = {
-        "contract_version": CONTRACT_VERSION,
-        "schema_version": 1,
-        "request_id": "test-req-123",
-        "prompt": "a white cat on a red chair",
-        "engine": "flux2-klein",
-        "width": 512,
-        "height": 512,
-        "steps": 20,
-        "guidance": 4.0,
-        "seed": 42,
-        "negative_prompt": "",
-        "format": "png",
-    }
-    msg = MockNatsMessage(json.dumps(request_payload).encode())
-
-    # Mock the engine layer - imports are done inside handle(), so patch at source
-    with (
-        patch("imagecli.engine.get_engine", return_value=mock_engine) as mock_get_engine,
-        patch("imagecli.engine.preflight_check") as mock_preflight,
-        patch("tempfile.NamedTemporaryFile") as mock_tmp,
-    ):
-        # Setup temp file to use tmp_path
-        mock_tmp_file = MagicMock()
-        mock_tmp_file.name = str(tmp_path / "test_image.png")
-        mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
-        mock_tmp_file.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value = mock_tmp_file
-
-        # Ensure the temp file exists for read_bytes
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
-
-        # Act
-        await adapter.handle(msg, request_payload)
-
-    # Assert: engine was obtained with correct params
-    mock_get_engine.assert_called_once_with(
-        "flux2-klein",
-        lora_path=None,
-        lora_scale=1.0,
-        trigger=None,
-        embedding_path=None,
-    )
-
-    # Assert: preflight was called
-    mock_preflight.assert_called_once_with(mock_engine)
-
-    # Assert: engine.generate was called
-    mock_engine.generate.assert_called_once()
-    call_args = mock_engine.generate.call_args
-    # prompt is positional, other params are kwargs
-    assert call_args.args[0] == "a white cat on a red chair"
-    assert call_args.kwargs["width"] == 512
-    assert call_args.kwargs["height"] == 512
-    assert call_args.kwargs["steps"] == 20
-    assert call_args.kwargs["guidance"] == 4.0
-    assert call_args.kwargs["seed"] == 42
-    assert call_args.kwargs["negative_prompt"] == ""
-
-    # Assert: reply was sent
-    response = msg.last_reply()
-    assert response["contract_version"] == CONTRACT_VERSION
-    assert response["request_id"] == "test-req-123"
-    assert response["ok"] is True
-    assert "image_b64" in response
-    assert response["format"] == "png"
-    assert response["width"] == 512
-    assert response["height"] == 512
-    assert "duration_s" in response
 
 
 @pytest.mark.asyncio
@@ -233,7 +156,6 @@ async def test_adapter_handles_missing_engine(adapter, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Engine validation not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_unknown_engine(adapter, mock_nc):
     """Adapter returns error when engine name is unknown."""
     # Arrange
@@ -257,7 +179,6 @@ async def test_adapter_handles_unknown_engine(adapter, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
     """Adapter returns error when preflight check fails (insufficient VRAM)."""
     # Arrange
@@ -288,7 +209,6 @@ async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc):
     """Adapter returns error when generation fails."""
     # Arrange
@@ -317,7 +237,6 @@ async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc)
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_uses_default_engine(adapter, mock_engine, mock_nc, tmp_path):
     """Adapter uses default engine when not specified in request."""
     # Arrange
@@ -341,11 +260,7 @@ async def test_adapter_uses_default_engine(adapter, mock_engine, mock_nc, tmp_pa
         mock_tmp_file.__exit__ = MagicMock(return_value=False)
         mock_tmp.return_value = mock_tmp_file
 
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
+        (tmp_path / "test_image.png").write_bytes(PNG_DATA)
 
         # Act
         await adapter.handle(msg, request_payload)
@@ -361,7 +276,6 @@ async def test_adapter_uses_default_engine(adapter, mock_engine, mock_nc, tmp_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generation logic not yet implemented in handle() - ADR-046")
 async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_path):
     """Adapter passes LoRA parameters to engine lookup."""
     # Arrange
@@ -389,11 +303,7 @@ async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_pa
         mock_tmp_file.__exit__ = MagicMock(return_value=False)
         mock_tmp.return_value = mock_tmp_file
 
-        (tmp_path / "test_image.png").write_bytes(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-            )
-        )
+        (tmp_path / "test_image.png").write_bytes(PNG_DATA)
 
         # Act
         await adapter.handle(msg, request_payload)
@@ -425,9 +335,9 @@ def mock_blob_store():
     store = MagicMock()
     canned_ref = BlobRef(
         store_key="ck-test",
-        content_hash="0" * 64,
+        content_hash=PNG_SHA,
         mime="image/png",
-        size=68,
+        size=len(PNG_DATA),
         source="imagecli",
         created_at=datetime.now(tz=UTC),
     )
@@ -472,11 +382,7 @@ def _patch_engine_layer(tmp_path, mock_engine):
     mock_tmp_file.name = str(tmp_path / "test_image.png")
     mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
     mock_tmp_file.__exit__ = MagicMock(return_value=False)
-    (tmp_path / "test_image.png").write_bytes(
-        base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-        )
-    )
+    (tmp_path / "test_image.png").write_bytes(PNG_DATA)
     return mock_tmp_file
 
 
@@ -501,6 +407,7 @@ async def test_handle_success_returns_blob_ref(
     put_kwargs = mock_blob_store.put.call_args.kwargs
     assert put_kwargs.get("mime") == "image/png"
     assert put_kwargs.get("source") == "imagecli"
+    assert put_kwargs.get("filename") == "test-blobref-success.png"
 
     response = msg.last_reply()
     assert response["ok"] is True
@@ -508,9 +415,9 @@ async def test_handle_success_returns_blob_ref(
     assert "blob_ref" in response
     blob_ref = response["blob_ref"]
     assert blob_ref["store_key"] == "ck-test"
-    assert blob_ref["content_hash"] == "0" * 64
+    assert blob_ref["content_hash"] == PNG_SHA
     assert blob_ref["mime"] == "image/png"
-    assert blob_ref["size"] == 68
+    assert blob_ref["size"] == len(PNG_DATA)
     assert "image_b64" not in response
     assert "file_path" not in response
 
@@ -543,6 +450,8 @@ async def test_handle_blobstore_put_failure_returns_delivery_failed(
     assert we is not None
     assert we["code"] == "worker.internal"
     assert we["retryable"] is True
+    # finally block must unlink the tmp file even when put() raises
+    assert not (tmp_path / "test_image.png").exists()
 
 
 @pytest.mark.asyncio

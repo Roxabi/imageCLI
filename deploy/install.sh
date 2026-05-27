@@ -73,7 +73,6 @@ skip() { echo "  skip  $*"; }
 info "Ensuring data directories..."
 run mkdir -p \
     "${DATA_DIR}/out" \
-    "${DATA_DIR}/nats_out" \
     "${DATA_DIR}/weights" \
     "${DATA_DIR}/env" \
     "$(dirname "${SEED_PATH}")" \
@@ -97,6 +96,7 @@ else
         echo "error: seed file missing at ${SEED_PATH}" >&2
         exit 1
     }
+    [[ -f "${SEED_PATH}" ]] && chmod 400 "${SEED_PATH}"
     podman secret create "${SECRET_NAME}" "${SEED_PATH}"
     ok "Secret ${SECRET_NAME} created from ${SEED_PATH}"
 fi
@@ -114,6 +114,7 @@ else
         echo "       place the Bearer token issued by the lyra-blobstore operator there, chmod 400." >&2
         exit 1
     }
+    [[ -f "${BLOBSTORE_TOKEN_PATH}" ]] && chmod 400 "${BLOBSTORE_TOKEN_PATH}"
     podman secret create "${BLOBSTORE_SECRET_NAME}" "${BLOBSTORE_TOKEN_PATH}"
     ok "Secret ${BLOBSTORE_SECRET_NAME} created from ${BLOBSTORE_TOKEN_PATH}"
 fi

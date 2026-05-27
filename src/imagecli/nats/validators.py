@@ -19,6 +19,7 @@ __all__ = [
     "_validate_request",
     "_resolve_loras",
     "_map_exception_to_error",
+    "_sanitize_delivery_exception",
 ]
 
 # Bounds validation constants
@@ -209,3 +210,40 @@ def _map_exception_to_error(exc: Exception) -> tuple[str, str]:
 
     # Generic fallback - don't leak internal details
     return "generation_failed", "Generation failed"
+
+
+def _sanitize_delivery_exception(exc: Exception) -> str:
+    """Map an httpx / BlobStore exception to a safe diagnostic string.
+
+    Sibling to :func:`_map_exception_to_error` — engine-side errors stay there,
+    delivery-side (HttpBlobStore) errors live here. The two stay separate
+    because their type domains are orthogonal (``httpx.*`` vs
+    ``imagecli.engine.*``).
+
+    The returned string is wire-facing (``WorkerError.detail``) AND log-facing
+    (``_probe_blobstore`` warning), so it MUST NOT carry URLs, headers, or any
+    string serialised from ``httpx.Request`` — those can embed the Bearer
+    token or query-string auth. We classify by ``isinstance`` only and never
+    interpolate ``exc`` directly.
+    """
+    # httpx is an optional transitive dep of roxabi-blobs.HttpBlobStore — lazy
+    # import so this helper stays usable even when httpx isn't installed
+    # (e.g., the legacy CLI path that never exercises the NATS adapter).
+    try:
+        import httpx
+    except ImportError:
+        return "internal delivery error"
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        # Narrowed by isinstance at runtime; httpx isn't statically typed here
+        # because of the lazy import.
+        status_code = exc.response.status_code  # type: ignore[attr-defined]
+        return f"upstream HTTP {status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "BlobStore request timed out"
+    if isinstance(exc, httpx.ConnectError):
+        return "BlobStore connection failed"
+    if isinstance(exc, httpx.HTTPError):
+        # Generic httpx parent — covers ProtocolError, RemoteProtocolError, etc.
+        return "BlobStore transport error"
+    return "internal delivery error"

@@ -6,6 +6,8 @@ import os
 import sys
 import warnings
 from pathlib import Path
+from typing import TypedDict
+from urllib.parse import urlparse
 
 from imagecli.paths import CLI_OUTPUT_DIR
 
@@ -61,17 +63,34 @@ def load_config() -> dict:
 
 
 _BLOBSTORE_DEFAULT_ENDPOINT = "http://roxabituwer:8449"
+_BLOBSTORE_ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
-def load_blobstore_config() -> dict[str, str | None]:
+class BlobstoreConfig(TypedDict):
+    """Resolved HttpBlobStore configuration.
+
+    ``endpoint`` is always populated (default fallback guaranteed).
+    ``token`` is ``None`` iff no source provided one — callers wiring the
+    worker MUST treat that as fatal (fail-fast at adapter init).
+    """
+
+    endpoint: str
+    token: str | None
+
+
+def load_blobstore_config() -> BlobstoreConfig:
     """Resolve HttpBlobStore endpoint + token.
 
-    Precedence: ``imagecli.toml [blobstore]`` > env (``IMAGECLI_BLOBSTORE_URL``,
-    ``IMAGECLI_BLOBSTORE_TOKEN``) > default (endpoint = M₁ lyra-blobstore on
-    port 8449; token = None — caller fails fast).
+    Precedence:
+      endpoint = ``imagecli.toml [blobstore].endpoint`` > env
+                 ``IMAGECLI_BLOBSTORE_URL`` > default (``http://roxabituwer:8449``).
+      token    = file at env ``IMAGECLI_BLOBSTORE_TOKEN_PATH`` (Quadlet secret
+                 mount-type, S97) > ``imagecli.toml [blobstore].token`` > env
+                 ``IMAGECLI_BLOBSTORE_TOKEN`` > ``None``.
 
-    Returns a dict with keys ``endpoint`` (always a str) and ``token`` (str or
-    None). Callers wiring the worker MUST treat ``token is None`` as fatal.
+    Validates ``endpoint`` carries an ``http``/``https`` scheme — anything else
+    (``file://``, ``ftp://``, CRLF-injected target) raises ``ValueError`` at
+    startup rather than getting forwarded to ``httpx``.
     """
     raw: dict[str, object] = {}
     path = _find_config()
@@ -81,9 +100,26 @@ def load_blobstore_config() -> dict[str, str | None]:
 
     endpoint_raw = raw.get("endpoint") or os.environ.get("IMAGECLI_BLOBSTORE_URL")
     endpoint = str(endpoint_raw) if endpoint_raw else _BLOBSTORE_DEFAULT_ENDPOINT
+    if urlparse(endpoint).scheme not in _BLOBSTORE_ALLOWED_SCHEMES:
+        raise ValueError(
+            f"blobstore endpoint scheme not allowed: {endpoint!r} — "
+            f"must be one of {sorted(_BLOBSTORE_ALLOWED_SCHEMES)}"
+        )
 
-    token_raw = raw.get("token") or os.environ.get("IMAGECLI_BLOBSTORE_TOKEN")
-    token = str(token_raw) if token_raw else None
+    # Token-from-file (Quadlet mount-type secret) — highest precedence so prod
+    # deployments don't accidentally fall through to a stale env-var or toml.
+    token: str | None = None
+    token_path_raw = os.environ.get("IMAGECLI_BLOBSTORE_TOKEN_PATH")
+    if token_path_raw:
+        token_path = Path(token_path_raw)
+        if token_path.is_file():
+            token = token_path.read_text().strip()
+    if not token:
+        token_raw = raw.get("token") or os.environ.get("IMAGECLI_BLOBSTORE_TOKEN")
+        token = str(token_raw).strip() if token_raw else None
+    # Treat empty string as None so callers can rely on a single fail-fast check.
+    if token is not None and not token:
+        token = None
 
     return {"endpoint": endpoint, "token": token}
 

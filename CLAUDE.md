@@ -25,7 +25,7 @@ Python 3.12 via `uv` · Typer+Rich · PyTorch 2.11+ cu130 · ruff (L≤100, py31
 imagecli.example.toml     — copy → ~/imagecli.toml
 images/
   prompts_in/             — .md prompts (git-tracked)
-                           — generated images go to ~/.roxabi/imagecli/{out,nats_out}/, ¬in repo
+                           — generated images go to ~/.roxabi/imagecli/out/, ¬in repo
 src/imagecli/
   cli.py                  — Typer app: generate, batch, engines, info
   config.py               — TOML loader (walks CWD → $HOME)
@@ -141,4 +141,4 @@ imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`ima
 
 - ¬over-engineering — thin flat CLI
 - Heavy imports (torch, diffusers) deferred to engine `_load()`
-- Output → `~/.roxabi/imagecli/out/` default (CLI), `~/.roxabi/imagecli/nats_out/` (NATS satellite); both Syncthing-replicated M₁↔M₂ · prompts → `images/prompts_in/` (git-tracked)
+- Output → `~/.roxabi/imagecli/out/` (CLI, Syncthing-replicated M₁↔M₂); NATS satellite delivers via HttpBlobStore (no local FS write since #97) · prompts → `images/prompts_in/` (git-tracked)

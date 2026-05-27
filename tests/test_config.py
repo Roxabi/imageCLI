@@ -118,9 +118,75 @@ def test_load_blobstore_empty_blobstore_section(
     """toml present without a [blobstore] section yields defaults."""
     monkeypatch.delenv("IMAGECLI_BLOBSTORE_URL", raising=False)
     monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN", raising=False)
+    monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", raising=False)
     toml_path = tmp_path / "imagecli.toml"
     toml_path.write_text('[defaults]\nengine = "flux2-klein"\n')
     with patch("imagecli.config._find_config", return_value=toml_path):
         cfg = load_blobstore_config()
     assert cfg["endpoint"] == "http://roxabituwer:8449"
     assert cfg["token"] is None
+
+
+def test_load_blobstore_token_path_wins_over_env_and_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """File at IMAGECLI_BLOBSTORE_TOKEN_PATH (Quadlet mount-type secret) is the
+    highest-precedence source — must beat both toml and env."""
+    token_path = tmp_path / "blobstore.token"
+    token_path.write_text("path-token-quadlet-mount\n")  # trailing newline intentional
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", str(token_path))
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN", "env-token-lower-precedence")
+    toml_doc = tmp_path / "imagecli.toml"
+    toml_doc.write_text('[blobstore]\nendpoint = "http://h:9"\ntoken = "toml-token-also-lower"\n')
+    with patch("imagecli.config._find_config", return_value=toml_doc):
+        cfg = load_blobstore_config()
+    # Trailing whitespace must be stripped so the Bearer header is clean.
+    assert cfg["token"] == "path-token-quadlet-mount"
+
+
+def test_load_blobstore_token_path_missing_falls_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If IMAGECLI_BLOBSTORE_TOKEN_PATH points at a non-existent file (operator
+    error or pre-install state), fall back to toml/env rather than crash."""
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", str(tmp_path / "nonexistent"))
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN", "env-fallback-token")
+    with patch("imagecli.config._find_config", return_value=None):
+        cfg = load_blobstore_config()
+    assert cfg["token"] == "env-fallback-token"
+
+
+def test_load_blobstore_empty_token_file_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Empty token file (or whitespace-only) must yield None so callers fail-fast
+    instead of sending `Authorization: Bearer ` (empty bearer)."""
+    token_path = tmp_path / "blobstore.token"
+    token_path.write_text("   \n")  # whitespace only
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", str(token_path))
+    monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN", raising=False)
+    with patch("imagecli.config._find_config", return_value=None):
+        cfg = load_blobstore_config()
+    assert cfg["token"] is None
+
+
+def test_load_blobstore_rejects_invalid_url_scheme(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-http(s) endpoint must raise rather than getting forwarded to httpx."""
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_URL", "file:///etc/passwd")
+    monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN", raising=False)
+    monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", raising=False)
+    with patch("imagecli.config._find_config", return_value=None):
+        with pytest.raises(ValueError, match="scheme not allowed"):
+            load_blobstore_config()
+
+
+def test_load_blobstore_accepts_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    """https is allowed for future S3/cloud BlobStore endpoints."""
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_URL", "https://blobstore.example.com:8449")
+    monkeypatch.setenv("IMAGECLI_BLOBSTORE_TOKEN", "secret")
+    monkeypatch.delenv("IMAGECLI_BLOBSTORE_TOKEN_PATH", raising=False)
+    with patch("imagecli.config._find_config", return_value=None):
+        cfg = load_blobstore_config()
+    assert cfg["endpoint"] == "https://blobstore.example.com:8449"

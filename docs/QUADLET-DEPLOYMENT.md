@@ -40,8 +40,8 @@ Lyra's `acl-matrix.json` (Roxabi/lyra#1381) scp's the regenerated NKey seed for 
    ```
 3. Recreate the Podman secret from the new seed:
    ```bash
-   podman secret rm imagecli-nats-gen
-   podman secret create imagecli-nats-gen ~/.roxabi/imagecli/nkeys/image-worker.seed
+   # Podman 4.3+ — verify with: podman --version
+   podman secret create --replace imagecli-nats-gen ~/.roxabi/imagecli/nkeys/image-worker.seed
    ```
 4. Restart the service:
    ```bash
@@ -77,9 +77,8 @@ Mount-type secrets are bound at container init — rotating the secret requires 
 printf '%s' "$NEW_TOKEN" > ~/.roxabi/imagecli/tokens/blobstore.token
 chmod 400 ~/.roxabi/imagecli/tokens/blobstore.token
 
-# 2. Replace the secret (atomic)
-podman secret rm imagecli-blobstore-token
-podman secret create imagecli-blobstore-token ~/.roxabi/imagecli/tokens/blobstore.token
+# 2. Replace the secret (atomic; Podman 4.3+ — verify with: podman --version)
+podman secret create --replace imagecli-blobstore-token ~/.roxabi/imagecli/tokens/blobstore.token
 
 # 3. Restart the service (MANDATORY — mount-type secrets bind at init)
 systemctl --user restart imagecli-gen.service
@@ -147,7 +146,6 @@ systemctl --user restart imagecli-gen.service
 | Path | Purpose |
 |---|---|
 | `~/.roxabi/imagecli/out/` | CLI output images |
-| `~/.roxabi/imagecli/nats_out/` | NATS satellite output images |
 | `~/.roxabi/imagecli/weights/` | PuLID + InsightFace weights (read-only in container) |
 | `~/.roxabi/imagecli/env/gen.env` | Runtime env (HF_HOME, LOG_LEVEL) |
 | `~/.cache/huggingface/` | HuggingFace model cache (shared with other CLIs) |

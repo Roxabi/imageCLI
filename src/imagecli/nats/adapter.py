@@ -15,7 +15,12 @@ from roxabi_contracts.errors import WorkerError
 from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
 
-from imagecli.nats.validators import _map_exception_to_error, _resolve_loras, _validate_request
+from imagecli.nats.validators import (
+    _map_exception_to_error,
+    _resolve_loras,
+    _sanitize_delivery_exception,
+    _validate_request,
+)
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +49,21 @@ def _make_worker_error(code: str, detail: str | None = None) -> WorkerError:
     """Build a structured WorkerError from a legacy free-text error code."""
     canonical, retryable = _WORKER_ERROR_MAP.get(code, ("worker.internal", True))
     return WorkerError(code=canonical, message=code, retryable=retryable, detail=detail)
+
+
+def _to_wire_blob_ref(store_ref: Any) -> WireBlobRef:
+    """Convert a ``roxabi_blobs.BlobRef`` (store-side) to a ``roxabi_contracts.BlobRef``
+    (wire-side, frozen + ``extra="forbid"``).
+
+    Strips store-only fields (``id``, ``is_sentinel``) before re-validating
+    against the wire model. Extracted out of ``handle()`` so the conversion
+    has a single test target and a future store-model field addition fails
+    one helper rather than crashing the adapter's hot path.
+
+    Typed as ``Any`` to avoid pulling ``roxabi_blobs.models`` into the type
+    surface — the runtime ``model_dump()`` duck-type is the contract.
+    """
+    return WireBlobRef.model_validate(store_ref.model_dump(exclude={"id", "is_sentinel"}))
 
 
 class ImageNatsAdapter(NatsAdapterBase):
@@ -159,6 +179,7 @@ class ImageNatsAdapter(NatsAdapterBase):
 
             # Generate image
             start_time = time.monotonic()
+            tmp_path: Path | None = None  # initialized for static analysis (W7 cleanup path)
             try:
                 # Generate to a temp file first
                 from tempfile import NamedTemporaryFile
@@ -190,6 +211,13 @@ class ImageNatsAdapter(NatsAdapterBase):
 
                     # Evict so the registry can reload cleanly next request.
                     model_registry.evict(engine_name)
+                # Best-effort cleanup of the temp file (engine may have created it partial).
+                if tmp_path is not None:
+                    try:
+                        if tmp_path.exists():
+                            tmp_path.unlink()
+                    except OSError:
+                        pass
                 await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
                 return
 
@@ -207,13 +235,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     source="imagecli",
                     filename=f"{request_id or 'unknown'}.{fmt}",
                 )
-                # `roxabi_blobs.BlobRef` (store) and `roxabi_contracts.BlobRef`
-                # (wire) are sibling models — the wire variant is frozen +
-                # extra="forbid", so we strip the store-only fields (`id`,
-                # `is_sentinel`) before embedding into ImageResponse.
-                wire_blob_ref = WireBlobRef.model_validate(
-                    store_ref.model_dump(exclude={"id", "is_sentinel"})
-                )
+                wire_blob_ref = _to_wire_blob_ref(store_ref)
 
                 resp = ImageResponse(
                     contract_version="1",
@@ -231,13 +253,16 @@ class ImageNatsAdapter(NatsAdapterBase):
                 await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
             except Exception as e:
-                log.exception(f"Failed to deliver image via BlobStore: {e}")
+                # Sanitize before logging or wire-emitting — `str(e)` from httpx
+                # exceptions can carry URLs and bearer tokens (#97 B2/W4).
+                sanitized = _sanitize_delivery_exception(e)
+                log.warning("Failed to deliver image via BlobStore: %s", sanitized)
                 await self._reply_error(
                     msg,
                     trace_id,
                     request_id,
                     "delivery_failed",
-                    f"BlobStore.put or NATS reply failed: {e}",
+                    sanitized,
                 )
             finally:
                 if uses_per_request_cfg:
