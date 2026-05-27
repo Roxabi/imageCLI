@@ -12,6 +12,12 @@
       "description": "Generate images with imageCLI — engine selection, prompt authoring, batch workflows, and VRAM-aware generation on local GPU.",
       "source": "./",
       "category": "tools"
+    },
+    {
+      "name": "logo-generator",
+      "description": "Generate animated SVG logos from a config-driven brand brief — interactive design, live preview, GIF/PNG export.",
+      "source": "./plugins/logo-generator",
+      "category": "branding"
     }
   ]
 }
