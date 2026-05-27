@@ -78,16 +78,19 @@ def nats_serve(
     from imagecli.config import load_blobstore_config
     from imagecli.nats import ImageNatsAdapter
 
-    # Slice 1 (#97): instantiate + probe. Slice 2 (T12/T13) wires `_blob_store`
-    # into ImageNatsAdapter; the underscore-prefixed name marks intentional
-    # non-use during slice 1 and silences reportUnusedVariable.
-    _blob_store = _init_blob_store()
+    # ADR-067 (#97): instantiate the cross-host BlobStore, run the warn-only
+    # connectivity probe, then wire the store into the adapter so handle()
+    # emits ImageResponse.blob_ref instead of inline bytes.
+    blob_store = _init_blob_store()
     cfg = load_blobstore_config()
     endpoint = cfg["endpoint"]
     assert endpoint is not None
     asyncio.run(_probe_blobstore(endpoint))
 
-    adapter = ImageNatsAdapter(default_engine=engine)
+    from roxabi_blobs.protocol import BlobStore as _BlobStoreProtocol
+
+    assert isinstance(blob_store, _BlobStoreProtocol)
+    adapter = ImageNatsAdapter(default_engine=engine, blob_store=blob_store)
     try:
         asyncio.run(adapter.run(nats_url=nats_url))
     except KeyboardInterrupt:

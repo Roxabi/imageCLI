@@ -355,7 +355,8 @@ Before loading a model, `preflight_check()` reads current GPU and system memory 
 | Variable | Default | Purpose |
 |---|---|---|
 | `IMAGECLI_MIN_FREE_RAM_GB` | `4.0` | Minimum free system RAM (GB) before `preflight_check` aborts a load. |
-| `IMAGECLI_NATS_OUTPUT_DIR` | `~/.roxabi/imagecli/nats_out` | Override directory used by the NATS satellite when delivering via `output_mode: "file"`. Useful for daemons whose CWD makes the config-file walk-up unreliable. |
+| `IMAGECLI_BLOBSTORE_URL` | `http://roxabituwer:8449` | Cross-host `HttpBlobStore` endpoint used by the NATS satellite to PUT generated images (M₂ → M₁). Overrides `imagecli.toml [blobstore].endpoint`. |
+| `IMAGECLI_BLOBSTORE_TOKEN` | _(unset)_ | Bearer token for the `HttpBlobStore` service. Production deployments should prefer the Quadlet secret `imagecli-blobstore-token`. |
 
 ### GPU memory cap
 

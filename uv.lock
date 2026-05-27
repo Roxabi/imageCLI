@@ -670,7 +670,7 @@ requires-dist = [
     { name = "peft", specifier = ">=0.18.1" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", specifier = ">=5.0" },
-    { name = "roxabi-blobs", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&rev=edb390d1b1f50828e985294baa71250fffd15eb7" },
+    { name = "roxabi-blobs", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&branch=staging" },
     { name = "roxabi-contracts", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging" },
     { name = "roxabi-nats", git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging" },
     { name = "sentencepiece", specifier = ">=0.2.1" },
@@ -1699,7 +1699,7 @@ wheels = [
 [[package]]
 name = "roxabi-blobs"
 version = "0.1.1"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&rev=edb390d1b1f50828e985294baa71250fffd15eb7#edb390d1b1f50828e985294baa71250fffd15eb7" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-blobs&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "pydantic" },
@@ -1708,7 +1708,7 @@ dependencies = [
 [[package]]
 name = "roxabi-contracts"
 version = "0.4.0"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-contracts&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -1716,7 +1716,7 @@ dependencies = [
 [[package]]
 name = "roxabi-nats"
 version = "0.4.1"
-source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging#e99cc6adec4097929bdab9afed0c15c2bbf23724" }
+source = { git = "https://github.com/Roxabi/lyra.git?subdirectory=packages%2Froxabi-nats&branch=staging#edb390d1b1f50828e985294baa71250fffd15eb7" }
 dependencies = [
     { name = "nats-py" },
     { name = "nkeys" },

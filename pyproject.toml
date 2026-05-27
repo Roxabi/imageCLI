@@ -51,11 +51,7 @@ torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
 roxabi-nats = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-nats", branch = "staging" }
 roxabi-contracts = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-contracts", branch = "staging" }
-# Slice 1 (#97): pinned at a recent rev (post-#1063 merge) because the existing
-# branch=staging sources (roxabi-contracts/-nats) anchor uv's git resolution to
-# pre-V2 commit e99cc6a where this subdirectory did not yet exist. Slice 2
-# (issue #97 T11) re-bumps contracts and rejoins this entry to branch=staging.
-roxabi-blobs = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-blobs", rev = "edb390d1b1f50828e985294baa71250fffd15eb7" }
+roxabi-blobs = { git = "https://github.com/Roxabi/lyra.git", subdirectory = "packages/roxabi-blobs", branch = "staging" }
 
 [tool.uv]
 override-dependencies = [

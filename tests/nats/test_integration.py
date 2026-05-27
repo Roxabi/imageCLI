@@ -65,13 +65,18 @@ def mock_engine():
 
 @pytest.fixture
 def adapter():
-    """Create an ImageNatsAdapter instance for testing."""
+    """Create an ImageNatsAdapter instance for testing.
+
+    Passes a noop BlobStore mock so legacy validation-path tests (which never
+    reach put()) don't need their own per-test wiring. #97 success-path tests
+    use `adapter_with_blob_store` to wire a canned BlobRef.
+    """
     from imagecli.nats.adapter import ImageNatsAdapter
 
-    adapter = ImageNatsAdapter(default_engine="flux2-klein")
+    noop_blob_store = MagicMock()
+    noop_blob_store.put = AsyncMock()
+    adapter = ImageNatsAdapter(default_engine="flux2-klein", blob_store=noop_blob_store)
 
-    # Mock reply method to capture replies without NATS connection
-    # This mirrors the pattern from test_adapter.py
     async def _mock_reply(msg, data: bytes) -> None:
         await msg.respond(data)
 
@@ -402,3 +407,175 @@ async def test_adapter_handles_lora_params(adapter, mock_engine, mock_nc, tmp_pa
     # Assert: success response
     response = msg.last_reply()
     assert response["ok"] is True
+
+
+# ── BlobRef migration tests (#97 slice 2 RED) ─────────────────────────────────
+
+
+@pytest.fixture
+def mock_blob_store():
+    """Mock BlobStore returning a canned BlobRef on put() (ADR-067)."""
+    from roxabi_blobs.models import BlobRef
+
+    store = MagicMock()
+    canned_ref = BlobRef(
+        store_key="ck-test",
+        content_hash="0" * 64,
+        mime="image/png",
+        size=68,
+        source="imagecli",
+    )
+    store.put = AsyncMock(return_value=canned_ref)
+    return store
+
+
+@pytest.fixture
+def adapter_with_blob_store(mock_blob_store):
+    """Adapter with mocked BlobStore wired (slice 2 — #97 T12)."""
+    from imagecli.nats.adapter import ImageNatsAdapter
+
+    adapter = ImageNatsAdapter(default_engine="flux2-klein", blob_store=mock_blob_store)
+
+    async def _mock_reply(msg, data: bytes) -> None:
+        await msg.respond(data)
+
+    adapter.reply = _mock_reply  # type: ignore[method-assign]
+    return adapter
+
+
+def _success_payload(request_id: str = "test-blobref-success") -> dict:
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "schema_version": 1,
+        "request_id": request_id,
+        "prompt": "a white cat on a red chair",
+        "engine": "flux2-klein",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "guidance": 4.0,
+        "seed": 42,
+        "negative_prompt": "",
+        "format": "png",
+    }
+
+
+def _patch_engine_layer(tmp_path, mock_engine):
+    """Standard engine-layer mocks for adapter integration tests."""
+    mock_tmp_file = MagicMock()
+    mock_tmp_file.name = str(tmp_path / "test_image.png")
+    mock_tmp_file.__enter__ = MagicMock(return_value=mock_tmp_file)
+    mock_tmp_file.__exit__ = MagicMock(return_value=False)
+    (tmp_path / "test_image.png").write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        )
+    )
+    return mock_tmp_file
+
+
+@pytest.mark.asyncio
+async def test_handle_success_returns_blob_ref(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """Happy path: handle() PUTs bytes to BlobStore and emits ImageResponse with blob_ref."""
+    payload = _success_payload()
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    mock_blob_store.put.assert_awaited_once()
+    put_kwargs = mock_blob_store.put.call_args.kwargs
+    assert put_kwargs.get("mime") == "image/png"
+    assert put_kwargs.get("source") == "imagecli"
+
+    response = msg.last_reply()
+    assert response["ok"] is True
+    assert response["request_id"] == payload["request_id"]
+    assert "blob_ref" in response
+    blob_ref = response["blob_ref"]
+    assert blob_ref["store_key"] == "ck-test"
+    assert blob_ref["content_hash"] == "0" * 64
+    assert blob_ref["mime"] == "image/png"
+    assert blob_ref["size"] == 68
+    assert "image_b64" not in response
+    assert "file_path" not in response
+
+
+@pytest.mark.asyncio
+async def test_handle_blobstore_put_failure_returns_delivery_failed(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """HttpBlobStore.put() failure routes to delivery_failed / worker.internal / retryable=True."""
+    import httpx
+
+    mock_blob_store.put = AsyncMock(side_effect=httpx.HTTPError("simulated put failure"))
+
+    payload = _success_payload(request_id="test-blobref-put-fail")
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    response = msg.last_reply()
+    assert response["ok"] is False
+    assert response["error"] == "delivery_failed"
+    we = response.get("worker_error")
+    assert we is not None
+    assert we["code"] == "worker.internal"
+    assert we["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_failure_after_put_returns_delivery_failed(
+    adapter_with_blob_store, mock_blob_store, mock_engine, tmp_path
+):
+    """Post-PUT / pre-reply failure: PUT succeeds, reply() raises → still emits delivery_failed.
+
+    Single-try wrap (spec N2): the response build + reply call live in the same try
+    block as the put() call so any post-PUT exception routes through _reply_error
+    rather than leaking an ok=True response without a blob_ref.
+    """
+    payload = _success_payload(request_id="test-blobref-reply-fail")
+    msg = MockNatsMessage(json.dumps(payload).encode())
+    mock_tmp_file = _patch_engine_layer(tmp_path, mock_engine)
+
+    # First reply (happy path build) raises; _reply_error's reply must still land.
+    reply_calls: list[bytes] = []
+    raise_once = {"done": False}
+
+    async def _flaky_reply(target_msg, data: bytes) -> None:
+        if not raise_once["done"]:
+            raise_once["done"] = True
+            raise RuntimeError("simulated reply transport failure")
+        reply_calls.append(data)
+        await target_msg.respond(data)
+
+    adapter_with_blob_store.reply = _flaky_reply  # type: ignore[method-assign]
+
+    with (
+        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.engine.preflight_check"),
+        patch("tempfile.NamedTemporaryFile", return_value=mock_tmp_file),
+    ):
+        await adapter_with_blob_store.handle(msg, payload)
+
+    mock_blob_store.put.assert_awaited_once()
+    response = msg.last_reply()
+    assert response["ok"] is False
+    assert response["error"] == "delivery_failed"
+    we = response.get("worker_error")
+    assert we is not None
+    assert we["code"] == "worker.internal"
+    assert we["retryable"] is True

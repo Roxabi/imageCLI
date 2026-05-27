@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from roxabi_blobs.protocol import BlobStore
 from roxabi_contracts.errors import WorkerError
 from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
 
-from imagecli.paths import move_to_nats_output
 from imagecli.nats.validators import _map_exception_to_error, _resolve_loras, _validate_request
 
 log = logging.getLogger(__name__)
@@ -58,6 +56,7 @@ class ImageNatsAdapter(NatsAdapterBase):
         self,
         default_engine: str = "flux2-klein",
         *,
+        blob_store: BlobStore,
         max_concurrent: int = 1,
         heartbeat_interval: float = 5.0,
         drain_timeout: float = 30.0,
@@ -74,6 +73,8 @@ class ImageNatsAdapter(NatsAdapterBase):
             wait_ready=False,  # worker semantics — see NatsAdapterBase docstring
         )
         self.default_engine = default_engine
+        # ADR-067: every successful image reply carries a BlobRef built by put().
+        self._blob_store: BlobStore = blob_store
         self.max_concurrent = max_concurrent
         self._sem = asyncio.Semaphore(max_concurrent)
         self._engine_loaded: str | None = None
@@ -154,7 +155,6 @@ class ImageNatsAdapter(NatsAdapterBase):
             seed = payload.get("seed")
             negative_prompt = payload.get("negative_prompt", "")
             fmt = payload.get("format", "png")
-            output_mode = payload.get("output_mode", "b64")
 
             # Generate image
             start_time = time.monotonic()
@@ -192,43 +192,20 @@ class ImageNatsAdapter(NatsAdapterBase):
                 await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
                 return
 
-            # Read, encode, and deliver image.
-            # `final_path` tracks the persistent file once the tmp has been moved;
-            # `reply_sent` flips True only after the NATS reply is acknowledged so
-            # that an encode/send failure after the move can clean up the orphan.
-            final_path: Path | None = None
-            reply_sent = False
+            # PUT → build response → reply. Wrapped in a single try (#97 N2): any
+            # failure between the PUT and the NATS reply lands as `delivery_failed`
+            # rather than an `ok=True` response without a `blob_ref`. A successful
+            # PUT followed by a failed reply leaks one blob on M₁ — acceptable per
+            # ADR-067 (server-side retention/TTL).
             try:
                 image_bytes = saved_path.read_bytes()
-
-                deliver_as_file = output_mode == "file"
-                image_b64: str | None = None
-                file_path_str: str | None = None
-                if not deliver_as_file:
-                    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-                    # NATS server allows 50 MB but the contract caps base64
-                    # replies at ~750 KB; larger payloads downgrade to file
-                    # delivery on the shared FS / Syncthing-replicated dir.
-                    if len(image_b64) > 750_000:
-                        deliver_as_file = True
-                        image_b64 = None
-
-                if deliver_as_file:
-                    try:
-                        final_path = move_to_nats_output(saved_path, request_id, fmt)
-                    except (OSError, shutil.Error, ValueError) as move_err:
-                        # Generation succeeded; persistence to nats_out failed.
-                        # Distinct from generation_failed so the hub can route it.
-                        log.exception(f"Failed to persist generated image: {move_err}")
-                        await self._reply_error(
-                            msg,
-                            trace_id,
-                            request_id,
-                            "delivery_failed",
-                            "Failed to persist image",
-                        )
-                        return
-                    file_path_str = str(final_path)
+                mime = f"image/{fmt}"
+                blob_ref = await self._blob_store.put(
+                    image_bytes,
+                    mime=mime,
+                    source="imagecli",
+                    filename=f"{request_id or 'unknown'}.{fmt}",
+                )
 
                 resp = ImageResponse(
                     contract_version="1",
@@ -236,25 +213,23 @@ class ImageNatsAdapter(NatsAdapterBase):
                     issued_at=datetime.now(timezone.utc),
                     request_id=request_id,
                     ok=True,
-                    image_b64=image_b64,
-                    file_path=file_path_str,
-                    mime_type=f"image/{fmt}",
+                    blob_ref=blob_ref,
+                    mime_type=mime,
                     width=width,
                     height=height,
                     engine=engine_name,
                     seed_used=seed if seed is not None else 0,
                 )
                 await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
-                reply_sent = True
 
             except Exception as e:
-                log.exception(f"Failed to encode response: {e}")
+                log.exception(f"Failed to deliver image via BlobStore: {e}")
                 await self._reply_error(
                     msg,
                     trace_id,
                     request_id,
-                    "generation_failed",
-                    "Failed to encode response",
+                    "delivery_failed",
+                    f"BlobStore.put or NATS reply failed: {e}",
                 )
             finally:
                 if uses_per_request_cfg:
@@ -262,20 +237,12 @@ class ImageNatsAdapter(NatsAdapterBase):
                 else:
                     # Registry-cached engine stays warm between requests.
                     engine.clear_cache()
-                # Clean up tmp file (a successful move makes saved_path.exists() false).
+                # Clean up tmp file unconditionally — BlobStore now owns persistence.
                 try:
                     if saved_path.exists():
                         saved_path.unlink()
                 except OSError:
                     pass
-                # Clean up persistent file if the move succeeded but the reply
-                # didn't — otherwise nats_out/ would accumulate orphans on every
-                # encoder/transport failure after move.
-                if final_path is not None and not reply_sent:
-                    try:
-                        final_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
 
     async def _reply_error(
         self,

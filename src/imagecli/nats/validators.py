@@ -25,16 +25,16 @@ __all__ = [
 MAX_IMAGE_DIMENSION = 4096
 MAX_STEPS = 200
 
-# Filesystem-safe character class for request_id — `request_id[:8]` is used as a
-# filename component in nats_output_dir, so anything outside this set could
-# escape the output directory (e.g. `request_id="a/../../b"` slices to "a/../../"
-# which `pathlib` treats as real path separators). Aligns with the contract's
-# `Annotated[str, StringConstraints(min_length=1)]` while pinning charset.
+# Filesystem-safe character class for request_id — `request_id` is passed as
+# the `filename` field on `BlobRef` (and historically as a path component in
+# the now-removed nats_output_dir helper). Keep the charset pinned so future
+# downstream consumers (filenames on disk, HTTP headers, etc.) get a safe
+# input. Aligns with the contract's `Annotated[str, StringConstraints(min_length=1)]`.
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # Allowlisted output formats — matches ImageRequest.format Literal in
-# roxabi_contracts.image.models. Same risk as request_id: fmt reaches the
-# filename in `nats_{id[:8]}.{fmt}`.
+# roxabi_contracts.image.models. Same defence-in-depth as request_id: fmt
+# reaches the `filename` field on BlobRef and downstream MIME mapping.
 ALLOWED_FORMATS = frozenset({"png", "jpeg", "webp"})
 
 # Allowlisted directories for LoRA and embedding paths

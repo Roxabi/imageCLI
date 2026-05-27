@@ -10,10 +10,8 @@ Follows voiceCLI test_stt_adapter.py pattern:
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -41,7 +39,9 @@ def test_adapter_binds_subjects_from_contracts() -> None:
     from roxabi_contracts.image import SUBJECTS
 
     assert ImageNatsAdapter is not None
-    adapter = ImageNatsAdapter(max_concurrent=1)  # type: ignore[arg-type]
+    noop_store = MagicMock()
+    noop_store.put = AsyncMock()
+    adapter = ImageNatsAdapter(max_concurrent=1, blob_store=noop_store)  # type: ignore[arg-type]
     assert adapter.subject == SUBJECTS.image_request, (
         f"adapter.subject ({adapter.subject!r}) must equal SUBJECTS.image_request "
         f"({SUBJECTS.image_request!r}); legacy hardcoded literal still in use."
@@ -82,12 +82,6 @@ class MockMsg:
         return list(self._published)
 
 
-def _valid_image_b64() -> str:
-    """Return a minimal valid base64-encoded PNG-ish byte blob."""
-    # Minimal PNG: 8-byte header + minimal IHDR + IDAT + IEND
-    return base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
-
-
 def _valid_payload(
     *,
     request_id: str = "req-001",
@@ -106,8 +100,14 @@ def _valid_payload(
 
 def _make_adapter(**kwargs):  # type: ignore[return]
     assert ImageNatsAdapter is not None, "ImageNatsAdapter not imported"
+    # Noop BlobStore — these tests exercise validation/error paths that
+    # short-circuit before reaching put(). #97 success-path tests live in
+    # `test_integration.py` with the `adapter_with_blob_store` fixture.
+    noop_store = MagicMock()
+    noop_store.put = AsyncMock()
     defaults: dict[str, object] = {
         "max_concurrent": 1,
+        "blob_store": noop_store,
     }
     defaults.update(kwargs)
     adapter = ImageNatsAdapter(**defaults)  # type: ignore[arg-type]
@@ -359,39 +359,11 @@ class TestImageNatsAdapter:
             f"expected detail to mention loras/mixed/singular, got {detail!r}"
         )
 
-    @pytest.mark.xfail(reason="Adapter needs generation logic in handle() - ADR-046")
-    def test_adapter_handles_valid_request(self, tmp_path: Path) -> None:
-        """Valid request returns success with image_b64."""
-        _require_imports()
-        # Arrange
-        adapter = _make_adapter(max_concurrent=1)
-        msg = MockMsg()
-        payload = _valid_payload(prompt="a white cat", engine="flux2-klein")
-
-        # Create a mock engine with generate method that writes to temp path
-        mock_engine = MagicMock()
-        mock_image_path = tmp_path / "output.png"
-        mock_image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
-        mock_engine.generate.return_value = mock_image_path
-
-        # Force get_engine onto the adapter module namespace (lazy import pattern)
-        import imagecli.nats.adapter as _mod
-        import imagecli.engine as _engine
-
-        _mod.get_engine = _engine.get_engine  # type: ignore[attr-defined]
-
-        with patch("imagecli.nats.adapter.get_engine", return_value=mock_engine):
-            # Act
-            asyncio.run(adapter.handle(msg, payload))
-
-        # Assert
-        reply = msg.last_reply()
-        assert reply["ok"] is True
-        assert reply["contract_version"] == "1"
-        assert reply["request_id"] == "req-001"
-        assert "image_b64" in reply
-        assert reply["image_b64"] == _valid_image_b64()
-        mock_engine.generate.assert_called_once()
+    # Happy-path generation lives in tests/nats/test_integration.py
+    # (`test_handle_success_returns_blob_ref` and the two delivery_failed
+    # cases). Removed the legacy xfail `test_adapter_handles_valid_request`
+    # that asserted `image_b64` in the reply — that surface no longer
+    # exists post-#97 / ADR-067.
 
     # ------------------------------------------------------------------
     # Path-traversal sanitization (request_id + format)
@@ -495,55 +467,9 @@ class TestImageNatsAdapter:
             valid, err = _validate_request(payload)
             assert valid, f"format={fmt} unexpectedly rejected: {err}"
 
-    # ------------------------------------------------------------------
-    # b64-overflow → file fallback (regression guard for the
-    # filename-vs-absolute-path bug fixed in a620f4b)
-    # ------------------------------------------------------------------
-    def test_b64_overflow_falls_back_to_absolute_file_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _require_imports()
-        # Redirect nats_out into tmp_path so we don't touch ~/.roxabi/
-        monkeypatch.setenv("IMAGECLI_NATS_OUTPUT_DIR", str(tmp_path / "nats_out"))
-
-        adapter = _make_adapter(max_concurrent=1)
-        msg = MockMsg()
-        payload = _valid_payload(request_id="abcdef12")
-
-        # Mock engine that writes a >562 KB file (≈ 750 KB once base64-encoded).
-        big = b"\x89PNG\r\n\x1a\n" + b"\x00" * (700 * 1024)
-        mock_engine = MagicMock()
-        mock_engine.name = "flux2-klein"
-        mock_engine.vram_gb = 8.0
-
-        def _gen(_prompt, *, output_path, **_kw):
-            output_path.write_bytes(big)
-            return output_path
-
-        mock_engine.generate.side_effect = _gen
-        mock_engine.cleanup = MagicMock()
-        mock_engine.clear_cache = MagicMock()
-
-        # Stub out preflight + registry lookup; force our mock engine into the path.
-        with (
-            patch("imagecli.engine.preflight_check"),
-            patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
-        ):
-            asyncio.run(adapter.handle(msg, payload))
-
-        reply = msg.last_reply()
-        assert reply["ok"] is True, f"expected success, got {reply}"
-        # Overflow path: file_path present, image_b64 absent
-        assert "file_path" in reply
-        assert "image_b64" not in reply
-        # Regression guard: must be an absolute path, not a bare filename
-        fp = Path(reply["file_path"])
-        assert fp.is_absolute()
-        assert fp.parent == (tmp_path / "nats_out").resolve()
-        assert fp.name == "nats_abcdef12.png"
-        # Registry-cached engines stay warm between requests; the per-request
-        # contract is `clear_cache()` in `finally` (¬`cleanup()`, which would
-        # tear the engine down). Lock that down.
-        assert mock_engine.clear_cache.called, "clear_cache must run on the registry-warm path"
-        assert not mock_engine.cleanup.called, "cleanup must NOT run on the registry-warm path"
-        assert fp.exists()
+    # b64-overflow → file fallback regression test removed with #97 / ADR-067.
+    # The b64/file dual-mode response surface was replaced by a single
+    # `blob_ref` field; size-driven fallback no longer exists. Equivalent
+    # delivery-failure coverage lives in `test_integration.py` via
+    # `test_handle_blobstore_put_failure_returns_delivery_failed` and
+    # `test_handle_reply_failure_after_put_returns_delivery_failed`.

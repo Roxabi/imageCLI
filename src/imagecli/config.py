@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -57,6 +58,34 @@ def load_config() -> dict:
     cfg.update(raw.get("defaults", {}))
     cfg["_config_path"] = str(path)
     return cfg
+
+
+_BLOBSTORE_DEFAULT_ENDPOINT = "http://roxabituwer:8449"
+
+
+def load_blobstore_config() -> dict[str, str | None]:
+    """Resolve HttpBlobStore endpoint + token.
+
+    Precedence: ``imagecli.toml [blobstore]`` > env (``IMAGECLI_BLOBSTORE_URL``,
+    ``IMAGECLI_BLOBSTORE_TOKEN``) > default (endpoint = M₁ lyra-blobstore on
+    port 8449; token = None — caller fails fast).
+
+    Returns a dict with keys ``endpoint`` (always a str) and ``token`` (str or
+    None). Callers wiring the worker MUST treat ``token is None`` as fatal.
+    """
+    raw: dict[str, object] = {}
+    path = _find_config()
+    if path is not None:
+        with path.open("rb") as f:
+            raw = tomllib.load(f).get("blobstore", {}) or {}
+
+    endpoint_raw = raw.get("endpoint") or os.environ.get("IMAGECLI_BLOBSTORE_URL")
+    endpoint = str(endpoint_raw) if endpoint_raw else _BLOBSTORE_DEFAULT_ENDPOINT
+
+    token_raw = raw.get("token") or os.environ.get("IMAGECLI_BLOBSTORE_TOKEN")
+    token = str(token_raw) if token_raw else None
+
+    return {"endpoint": endpoint, "token": token}
 
 
 def get_weights_dir() -> Path:
