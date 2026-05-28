@@ -23,24 +23,11 @@ Python 3.12 via `uv` · Typer+Rich · PyTorch 2.11+ cu130 · ruff (L≤100, py31
 
 ```
 imagecli.example.toml     — copy → ~/imagecli.toml
-images/
-  prompts_in/             — .md prompts (git-tracked)
-                           — generated images go to ~/.roxabi/imagecli/out/, ¬in repo
-src/imagecli/
-  cli.py                  — Typer app: generate, batch, engines, info
-  config.py               — TOML loader (walks CWD → $HOME)
-  engine.py               — `ImageEngine` ABC + registry
-  markdown.py             — YAML frontmatter parser
-  daemon.py               — AF_UNIX socket daemon (preload + serve, `imagecli serve`)
-  engines/
-    flux2_klein.py        — default, quanto FP8
-    flux2_klein_fp8.py    — torchao FP8 (40% slower, torch.compile OK)
-    flux2_klein_fp4.py    — NVFP4 (Blackwell, comfy-kitchen)
-    pulid_flux2_klein.py  — Klein + PuLID face lock (extra)
-    pulid_flux1_dev.py    — FLUX.1-dev GGUF + PuLID v0.9.1
-    flux1_dev.py          — FLUX.1-dev quanto (fp8 sm≥89 | int8 Ampere)
-    flux1_schnell.py      — FLUX.1-schnell quanto
-    sd35.py               — SD3.5 Large Turbo
+images/prompts_in/        — .md prompts (git-tracked)
+src/imagecli/             — cli, config, engine, markdown, daemon
+src/imagecli/engines/     — flux2_klein, flux2_klein_fp8, flux2_klein_fp4,
+                            pulid_flux2_klein, pulid_flux1_dev,
+                            flux1_dev, flux1_schnell, sd35
 ```
 
 ## CLI (quick)
@@ -51,94 +38,20 @@ imagecli batch DIR                    [-e ENGINE] [--two-phase] [flags...]
 imagecli engines | info
 ```
 
-→ `docs/cli.md` — full flag reference + examples. Or `imagecli --help`.
+→ `docs/cli.md` — flags + examples. `docs/prompt-format.md` — frontmatter. `docs/configuration.md` — `imagecli.toml`.
 
-## Markdown Prompt Format
-
-```markdown
----
-engine: flux2-klein          # ∈ ENGINE set above
-width: 1024                  # multiple of 64
-height: 1024
-steps: 50                    # sd35:20, schnell:4
-guidance: 4.0                # sd35:1.0, schnell:0.0
-seed: 42                     # optional
-negative_prompt: "blurry"
-format: png                  # png | jpg | webp
-face_image: /path/to/ref.png # pulid-* only (abs or relative to .md)
-pulid_strength: 0.6          # pulid-flux2-klein only (default 0.6)
-lora_path: /path/to/lora.safetensors  # flux2-klein, flux2-klein-fp4, flux2-klein-fp8
-lora_scale: 1.0              # default 1.0, try 1.5 for stronger identity
-trigger: lyraface            # pivotal-tuning trigger (required if LoRA has emb_params)
-embedding_path: /path/to/emb.safetensors  # standalone pivotal emb (overrides emb_params)
----
-
-Prompt text. Can be multi-paragraph.
-```
-
-## Config
-
-`imagecli.toml` searched CWD → `$HOME`. Global: `~/imagecli.toml`.
-Priority: CLI flag > frontmatter > imagecli.toml > default.
-
-`[blobstore]` stanza (NATS worker only, #97): `endpoint` + `token` for the cross-host HttpBlobStore (M₂ → M₁ lyra-blobstore on port 8449). Server-config precedence: `imagecli.toml [blobstore]` > env (`IMAGECLI_BLOBSTORE_URL`, `IMAGECLI_BLOBSTORE_TOKEN`) > default (`http://roxabituwer:8449`, no token). Missing token → fail-fast at adapter init. Production: token via Quadlet secret `imagecli-blobstore-token`.
-
-## flux2-klein auto-mode
-
-| Command | Mode | Peak VRAM | Compile |
-|---|---|---|---|
-| `generate` | CPU offload | ~8 GB | No |
-| `batch` (default) | all-on-GPU | ~12 GB | No (quanto) / Yes (fp8/fp4) |
-| `batch --two-phase` | 2-phase | ~8 GB enc → ~4 GB gen | No (quanto) / Yes (fp8/fp4) |
-
-→ `docs/performance.md` — `_optimize_pipe()`, `torch.compile` status, 2-phase details, `--no-compile`.
-
-## Memory Safety
-
-`preflight_check(engine)` ∈ every `_load()` → raises `MemoryError` iff free VRAM < `engine.vram_gb` ∨ free RAM < `IMAGECLI_MIN_FREE_RAM_GB` (default 4.0) ∨ no CUDA. `cleanup()` ∈ `finally` post-gen.
-
-→ `docs/memory-safety.md` — full details.
-
-## Key Patterns
+## Key Invariants
 
 - Engines lazy: load ∈ `_load()` on 1st `generate()`, ¬on import
-- Registry ∈ `engine.py:_get_registry()` — add engines there
-- `enable_model_cpu_offload()` on most (flux2-klein `generate` + 2-phase `batch`)
-- Adaptive quantization ∈ `optimum-quanto`: fp8 (sm≥89 Ada/Blackwell) | int8 (Ampere sm≥80). SD3.5 T5 always int8.
-- `_get_compute_capability()` ∈ `engine.py` detects GPU arch for quant selection
 - `preflight_check()` pre-`_load()` — abort early, ¬OOM mid-load
 - `cleanup()` ∈ `finally` post-gen (even on failure)
-- `_optimize_pipe(pipe, compile=...)` ∈ `_load()` once; `_compiled` flag ¬double-compile
-- Batch mode: 2-phase iff `supports_two_phase` (flux2-klein), else sequential
 - Output: never overwrite existing — auto-suffix `_1`, `_2`, …
 - Default: `flux2-klein` — best quality/VRAM @ 16GB
-- `pulid-flux2-klein` always `compile=False` (captures forward methods, ¬compatible w/ per-gen patching)
-- PuLID weights: `~/.roxabi/imagecli/weights/pulid/pulid_flux2_klein_v2.safetensors` + `pulid_flux_v0.9.1.safetensors` + InsightFace AntelopeV2 `~/.roxabi/imagecli/weights/insightface/`
 
-→ `docs/pulid-internals.md` — CA remapping, dim projection (3072↔4096), GGUF details.
-
-## Benchmark
-
-Measured: RTX 5070 Ti, Apr 2026. Summary: `quanto FP8` fastest @ 512² (7.05 it/s); `NVFP4 --two-phase` wins everything @ 1024²+ (only engine that fits 2048²).
-
-→ `docs/benchmark.md` — smoke/batch commands, GPU support matrix, measured results, resolution scaling, engine-pick decision table, key findings.
-
-## LoRA
-
-Training: [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit/) externally.
-Inference: `flux2-klein` ∨ `flux2-klein-fp8` via `--lora` | `lora_path`. Fused into base pre-FP8 quant.
-Supported: quanto FP8 + torchao FP8. FP4 (pre-quantized) ¬supported.
-
-→ `docs/lora.md` — config, load order, tuning.
-
-## Container Deployment
-
-imageCLI ships as a single Quadlet unit (`imagecli-gen.container`) on M₂ (`image-worker` role). Deploy with `bash deploy/install.sh` (idempotent, supports `--dry-run`). Requires secrets `imagecli-nats-gen` (NATS NKey seed) and `imagecli-blobstore-token` (Bearer for cross-host HttpBlobStore, #97), plus Phase 1D operator data move (`~/ComfyUI/models/pulid` → `~/.roxabi/imagecli/weights/pulid`). UID 1503 fixed in image.
-
-→ `docs/QUADLET-DEPLOYMENT.md` — install runbook, secret rotation, diagnostics, Phase 1D operator actions.
+→ `docs/key-patterns.md` — full patterns. `docs/performance.md` — auto-mode, compile. `docs/memory-safety.md` — preflight details. `docs/benchmark.md` — measured results. `docs/lora.md` — training + inference. `docs/pulid-internals.md` — CA remapping, dim projection. `docs/QUADLET-DEPLOYMENT.md` — install runbook.
 
 ## Conventions
 
 - ¬over-engineering — thin flat CLI
 - Heavy imports (torch, diffusers) deferred to engine `_load()`
-- Output → `~/.roxabi/imagecli/out/` (CLI, Syncthing-replicated M₁↔M₂); NATS satellite delivers via HttpBlobStore (no local FS write since #97) · prompts → `images/prompts_in/` (git-tracked)
+- Output → `~/.roxabi/imagecli/out/` (CLI); NATS satellite → HttpBlobStore (no local FS since #97) · prompts → `images/prompts_in/` (git-tracked)
