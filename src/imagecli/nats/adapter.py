@@ -51,21 +51,6 @@ def _make_worker_error(code: str, detail: str | None = None) -> WorkerError:
     return WorkerError(code=canonical, message=code, retryable=retryable, detail=detail)
 
 
-def _to_wire_blob_ref(store_ref: Any) -> WireBlobRef:
-    """Convert a ``roxabi_blobs.BlobRef`` (store-side) to a ``roxabi_contracts.BlobRef``
-    (wire-side, frozen + ``extra="forbid"``).
-
-    Strips store-only fields (``id``, ``is_sentinel``) before re-validating
-    against the wire model. Extracted out of ``handle()`` so the conversion
-    has a single test target and a future store-model field addition fails
-    one helper rather than crashing the adapter's hot path.
-
-    Typed as ``Any`` to avoid pulling ``roxabi_blobs.models`` into the type
-    surface — the runtime ``model_dump()`` duck-type is the contract.
-    """
-    return WireBlobRef.model_validate(store_ref.model_dump(exclude={"id", "is_sentinel"}))
-
-
 class ImageNatsAdapter(NatsAdapterBase):
     """NATS adapter for image generation requests from Lyra hub.
 
@@ -235,7 +220,12 @@ class ImageNatsAdapter(NatsAdapterBase):
                     source="imagecli",
                     filename=f"{request_id or 'unknown'}.{fmt}",
                 )
-                wire_blob_ref = _to_wire_blob_ref(store_ref)
+                wire_blob_ref = WireBlobRef.from_store_ref(store_ref)
+                if not wire_blob_ref.store_key:
+                    raise ValueError(
+                        "BlobStore.put returned an empty store_key; "
+                        "a live ingest must yield a real store_key"
+                    )
 
                 resp = ImageResponse(
                     contract_version="1",
