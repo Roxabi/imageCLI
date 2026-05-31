@@ -194,7 +194,7 @@ async def test_adapter_handles_preflight_failure(adapter, mock_engine, mock_nc):
     msg = MockNatsMessage(b"test")
 
     with (
-        patch("imagecli.engine.get_engine", return_value=mock_engine),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
         patch(
             "imagecli.engine.preflight_check", side_effect=InsufficientResourcesError("low VRAM")
         ),
