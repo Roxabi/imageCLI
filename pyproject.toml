@@ -94,6 +94,7 @@ dev = [
     "import-linter>=2.0,<3.0",
     "pyright>=1.1.408",
     "pytest-cov>=7.1.0",
+    "radon>=6.0.1",
 ]
 fp8 = [
     "torchao>=0.17.0",
