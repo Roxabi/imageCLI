@@ -54,7 +54,7 @@ def _make_worker_error(code: str, detail: str | None = None) -> WorkerError:
 class ImageNatsAdapter(NatsAdapterBase):
     """NATS adapter for image generation requests from Lyra hub.
 
-    Subscribes to `lyra.image.generate.request` and responds with generated images.
+    Subscribes to `factory.image.generate.request` and responds with generated images.
     Follows the satellite-bootstrap pattern established by voice adapters (ADR-039).
     """
 
@@ -312,7 +312,7 @@ class ImageNatsAdapter(NatsAdapterBase):
         await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
     def heartbeat_payload(self) -> dict:
-        """Extend base heartbeat per lyra.image contract (see roxabi_contracts.image.models.Heartbeat)."""
+        """Extend base heartbeat per factory.image contract (see roxabi_contracts.image.models.Heartbeat)."""
         base = super().heartbeat_payload()
         from imagecli.model_registry import model_registry
 
