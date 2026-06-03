@@ -226,6 +226,7 @@ async def test_adapter_handles_generation_failure(adapter, mock_engine, mock_nc)
     with (
         patch("imagecli.engine.get_engine", return_value=mock_engine),
         patch("imagecli.engine.preflight_check"),
+        patch("imagecli.model_registry.model_registry.get", return_value=mock_engine),
     ):
         # Act
         await adapter.handle(msg, request_payload)
