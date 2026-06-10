@@ -1,4 +1,5 @@
 @.claude/stack.yml
+@~/.claude/shared/global-patterns.md
 
 # imageCLI
 
