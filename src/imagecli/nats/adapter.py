@@ -244,6 +244,9 @@ class ImageNatsAdapter(NatsAdapterBase):
                         "a live ingest must yield a real store_key"
                     )
 
+                # hoisted dict[str, Any] — inline **({...} if ...) makes pyright
+                # type the spread as dict[str, str] and reject remaining kwargs
+                job_kw: dict[str, Any] = {"job_id": job_id} if job_id is not None else {}
                 resp = ImageResponse(
                     contract_version=CONTRACT_VERSION,
                     trace_id=trace_id,
@@ -256,7 +259,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     height=height,
                     engine=engine_name,
                     seed_used=seed if seed is not None else 0,
-                    **({"job_id": job_id} if job_id is not None else {}),
+                    **job_kw,
                 )
                 await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
@@ -309,6 +312,8 @@ class ImageNatsAdapter(NatsAdapterBase):
         # the voiceCLI _err_tts pattern.
         safe_trace = trace_id or "unknown"
         now = datetime.now(timezone.utc)
+        # hoisted dict[str, Any] — see success-path note on inline-spread pyright limits
+        job_kw: dict[str, Any] = {"job_id": job_id} if job_id is not None else {}
         if request_id:
             resp = ImageResponse(
                 contract_version=CONTRACT_VERSION,
@@ -318,7 +323,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                 ok=False,
                 error=error,
                 worker_error=worker_err,
-                **({"job_id": job_id} if job_id is not None else {}),
+                **job_kw,
             )
         else:
             resp = ImageResponse.model_construct(
@@ -329,7 +334,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                 ok=False,
                 error=error,
                 worker_error=worker_err,
-                **({"job_id": job_id} if job_id is not None else {}),
+                **job_kw,
             )
         await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
