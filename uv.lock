@@ -1652,7 +1652,7 @@ wheels = [
 [[package]]
 name = "roxabi-blobs"
 version = "0.1.2"
-source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-blobs&branch=staging#08ed8d16a75a54dfd870522e7fb23944e7b22a7d" }
+source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-blobs&branch=staging#da2ebebd52dcd7cf1e564ee3c72f234caeb9e4b2" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "httpx" },
@@ -1661,8 +1661,8 @@ dependencies = [
 
 [[package]]
 name = "roxabi-contracts"
-version = "0.7.0"
-source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-contracts&branch=staging#08ed8d16a75a54dfd870522e7fb23944e7b22a7d" }
+version = "0.9.0"
+source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-contracts&branch=staging#da2ebebd52dcd7cf1e564ee3c72f234caeb9e4b2" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -1670,7 +1670,7 @@ dependencies = [
 [[package]]
 name = "roxabi-nats"
 version = "0.4.2"
-source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-nats&branch=staging#08ed8d16a75a54dfd870522e7fb23944e7b22a7d" }
+source = { git = "https://github.com/Roxabi/roxabi-factory.git?subdirectory=packages%2Froxabi-nats&branch=staging#da2ebebd52dcd7cf1e564ee3c72f234caeb9e4b2" }
 dependencies = [
     { name = "nats-py" },
     { name = "nkeys" },
