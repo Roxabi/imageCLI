@@ -11,6 +11,7 @@ from typing import Any
 
 from roxabi_blobs.protocol import BlobStore
 from roxabi_contracts.blob_ref import BlobRef as WireBlobRef
+from roxabi_contracts.envelope import CONTRACT_VERSION
 from roxabi_contracts.errors import WorkerError
 from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
@@ -93,13 +94,16 @@ class ImageNatsAdapter(NatsAdapterBase):
         # to request_id (then "unknown") so error paths can still produce a
         # valid ImageResponse when the client omits it.
         trace_id = payload.get("trace_id") or request_id or "unknown"
+        job_id = payload.get("job_id")
 
         # Acquire semaphore for concurrency control
         async with self._sem:
             # Validate required fields and bounds
             valid, error = _validate_request(payload)
             if not valid:
-                await self._reply_error(msg, trace_id, request_id, "missing_required_field", error)
+                await self._reply_error(
+                    msg, trace_id, request_id, "missing_required_field", error, job_id=job_id
+                )
                 return
 
             engine_name = payload["engine"]
@@ -110,14 +114,21 @@ class ImageNatsAdapter(NatsAdapterBase):
                 from imagecli.engine import get_engine, preflight_check, list_engines
             except ImportError as e:
                 await self._reply_error(
-                    msg, trace_id, request_id, "engine_load_failed", f"Import error: {e}"
+                    msg,
+                    trace_id,
+                    request_id,
+                    "engine_load_failed",
+                    f"Import error: {e}",
+                    job_id=job_id,
                 )
                 return
 
             # Validate engine name against registry
             engine_names = {e["name"] for e in list_engines()}
             if engine_name not in engine_names:
-                await self._reply_error(msg, trace_id, request_id, "unknown_engine", engine_name)
+                await self._reply_error(
+                    msg, trace_id, request_id, "unknown_engine", engine_name, job_id=job_id
+                )
                 return
 
             # Get or create engine instance.
@@ -142,7 +153,9 @@ class ImageNatsAdapter(NatsAdapterBase):
                 self._engine_loaded = engine_name
             except Exception as e:
                 error_code, error_detail = _map_exception_to_error(e)
-                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
+                await self._reply_error(
+                    msg, trace_id, request_id, error_code, error_detail, job_id=job_id
+                )
                 return
 
             # Preflight check (VRAM/RAM validation)
@@ -150,7 +163,9 @@ class ImageNatsAdapter(NatsAdapterBase):
                 preflight_check(engine)
             except Exception as e:
                 error_code, error_detail = _map_exception_to_error(e)
-                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
+                await self._reply_error(
+                    msg, trace_id, request_id, error_code, error_detail, job_id=job_id
+                )
                 return
 
             # Extract generation params with defaults
@@ -203,7 +218,9 @@ class ImageNatsAdapter(NatsAdapterBase):
                             tmp_path.unlink()
                     except OSError:
                         pass
-                await self._reply_error(msg, trace_id, request_id, error_code, error_detail)
+                await self._reply_error(
+                    msg, trace_id, request_id, error_code, error_detail, job_id=job_id
+                )
                 return
 
             # PUT → build response → reply. Wrapped in a single try (#97 N2): any
@@ -227,8 +244,11 @@ class ImageNatsAdapter(NatsAdapterBase):
                         "a live ingest must yield a real store_key"
                     )
 
+                # hoisted dict[str, Any] — inline **({...} if ...) makes pyright
+                # type the spread as dict[str, str] and reject remaining kwargs
+                job_kw: dict[str, Any] = {"job_id": job_id} if job_id is not None else {}
                 resp = ImageResponse(
-                    contract_version="1",
+                    contract_version=CONTRACT_VERSION,
                     trace_id=trace_id,
                     issued_at=datetime.now(timezone.utc),
                     request_id=request_id,
@@ -239,6 +259,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     height=height,
                     engine=engine_name,
                     seed_used=seed if seed is not None else 0,
+                    **job_kw,
                 )
                 await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 
@@ -253,6 +274,7 @@ class ImageNatsAdapter(NatsAdapterBase):
                     request_id,
                     "delivery_failed",
                     sanitized,
+                    job_id=job_id,
                 )
             finally:
                 if uses_per_request_cfg:
@@ -274,6 +296,7 @@ class ImageNatsAdapter(NatsAdapterBase):
         request_id: str,
         error: str,
         error_detail: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Send an error reply per the v0.4.x ImageResponse contract.
 
@@ -289,25 +312,29 @@ class ImageNatsAdapter(NatsAdapterBase):
         # the voiceCLI _err_tts pattern.
         safe_trace = trace_id or "unknown"
         now = datetime.now(timezone.utc)
+        # hoisted dict[str, Any] — see success-path note on inline-spread pyright limits
+        job_kw: dict[str, Any] = {"job_id": job_id} if job_id is not None else {}
         if request_id:
             resp = ImageResponse(
-                contract_version="1",
+                contract_version=CONTRACT_VERSION,
                 trace_id=safe_trace,
                 issued_at=now,
                 request_id=request_id,
                 ok=False,
                 error=error,
                 worker_error=worker_err,
+                **job_kw,
             )
         else:
             resp = ImageResponse.model_construct(
-                contract_version="1",
+                contract_version=CONTRACT_VERSION,
                 trace_id=safe_trace,
                 issued_at=now,
                 request_id="",
                 ok=False,
                 error=error,
                 worker_error=worker_err,
+                **job_kw,
             )
         await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
 

@@ -473,3 +473,106 @@ class TestImageNatsAdapter:
     # delivery-failure coverage lives in `test_integration.py` via
     # `test_handle_blobstore_put_failure_returns_delivery_failed` and
     # `test_handle_reply_failure_after_put_returns_delivery_failed`.
+
+    # ------------------------------------------------------------------
+    # job_id echo — #1840
+    # ------------------------------------------------------------------
+    def test_job_id_echoed_on_error_path(self) -> None:
+        """job_id from the request is echoed back on error replies (#1840)."""
+        _require_imports()
+        adapter = _make_adapter(max_concurrent=1)
+        msg = MockMsg()
+        payload = _valid_payload()
+        payload["job_id"] = "job-echo-err-001"
+        del payload["prompt"]  # triggers missing_required_field on the error path
+
+        asyncio.run(adapter.handle(msg, payload))
+
+        reply = msg.last_reply()
+        assert reply["ok"] is False
+        assert reply.get("job_id") == "job-echo-err-001", (
+            f"expected job_id='job-echo-err-001' echoed on error reply, got {reply.get('job_id')!r}"
+        )
+
+    def test_job_id_echoed_on_success_path(self) -> None:
+        """job_id from the request is echoed back on the success reply (#1840).
+
+        We patch ImageResponse to capture constructor kwargs (including job_id)
+        without running full Pydantic validation — which would fail because our
+        blob_ref is a MagicMock, not a real BlobRef. The captured kwargs are the
+        ground-truth evidence that the adapter passed job_id through correctly.
+        """
+        _require_imports()
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_blob_store = MagicMock()
+        mock_blob_store.put = AsyncMock(return_value=MagicMock())
+
+        adapter = _make_adapter(max_concurrent=1, blob_store=mock_blob_store)
+        msg = MockMsg()
+        payload = _valid_payload()
+        payload["job_id"] = "job-echo-ok-002"
+
+        mock_engine = MagicMock()
+        mock_engine.cleanup = MagicMock()
+        mock_engine.clear_cache = MagicMock()
+
+        fake_image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp.write(fake_image_bytes)
+            fake_path = Path(tmp.name)
+
+        mock_engine.generate = MagicMock(return_value=fake_path)
+
+        # Intercept ImageResponse() — capture kwargs, return serializable mock.
+        captured_kwargs: dict = {}
+
+        def _fake_image_response(*args, **kwargs):  # type: ignore[return]
+            captured_kwargs.update(kwargs)
+            mock_resp = MagicMock()
+            mock_resp.model_dump_json.return_value = json.dumps(
+                {
+                    "ok": True,
+                    "job_id": kwargs.get("job_id", ""),
+                    "request_id": kwargs.get("request_id", ""),
+                }
+            )
+            return mock_resp
+
+        # WireBlobRef: from_store_ref returns mock with truthy store_key.
+        fake_wire_ref = MagicMock()
+        fake_wire_ref.store_key = "blobstore://test/image.png"
+
+        try:
+            with (
+                patch("imagecli.engine.get_engine", return_value=mock_engine),
+                patch("imagecli.engine.list_engines", return_value=[{"name": "flux2-klein"}]),
+                patch("imagecli.engine.preflight_check"),
+                patch("imagecli.nats.adapter.WireBlobRef") as mock_wire_cls,
+                patch("imagecli.nats.adapter.ImageResponse", side_effect=_fake_image_response),
+                patch("imagecli.model_registry.model_registry") as mock_registry,
+            ):
+                mock_wire_cls.from_store_ref.return_value = fake_wire_ref
+                mock_registry.get.return_value = mock_engine
+                mock_registry.loaded_engines.return_value = []
+                asyncio.run(adapter.handle(msg, payload))
+        finally:
+            try:
+                os.unlink(fake_path)
+            except OSError:
+                pass
+
+        # Primary assertion: adapter passed job_id= to ImageResponse constructor.
+        assert captured_kwargs.get("job_id") == "job-echo-ok-002", (
+            f"expected job_id='job-echo-ok-002' passed to ImageResponse, "
+            f"got {captured_kwargs.get('job_id')!r} (full kwargs: {captured_kwargs})"
+        )
+        # Secondary: the serialized reply reflects job_id on the wire.
+        reply = msg.last_reply()
+        assert reply.get("job_id") == "job-echo-ok-002", (
+            f"expected job_id='job-echo-ok-002' echoed on success reply, got {reply.get('job_id')!r}"
+        )
