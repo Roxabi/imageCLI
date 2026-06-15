@@ -1,7 +1,7 @@
 [Unit]
 Description=imageCLI generation NATS worker
-Wants=lyra-nats.service
-After=lyra-nats.service
+Wants=factory-nats.service
+After=factory-nats.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -28,8 +28,8 @@ Secret=imagecli-blobstore-token,type=mount,target=imagecli-blobstore-token,uid=1
 AddDevice=nvidia.com/gpu=all
 # UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
 UserNS=keep-id:uid=1503,gid=1503
-# Big-bang NATS consolidation — connect to shared lyra-nats on roxabi.network.
-Environment=NATS_URL=nats://lyra-nats:4222
+# Connect to factory-nats on roxabi.network (factory.* wire, #1670 lockstep).
+Environment=NATS_URL=nats://factory-nats:4222
 Environment=NATS_NKEY_SEED_PATH=/run/secrets/imagecli-nats-gen.seed
 Environment=IMAGECLI_BLOBSTORE_TOKEN_PATH=/run/secrets/imagecli-blobstore-token
 Environment=IMAGECLI_BLOBSTORE_URL=http://roxabituwer:8449
