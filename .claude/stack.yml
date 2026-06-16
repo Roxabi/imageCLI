@@ -58,3 +58,10 @@ quality_gates:
   import_layers:
     enabled: true
     stage: pre-push
+  healthcmd_quoting:
+    enabled: true
+    script: tools/check_healthcmd_quoting.sh
+    stage: pre-push
+    description: >
+      Detect Quadlet HealthCmd values ending in a double-quote (Podman ≤5.7.0
+      strips trailing quotes, causing false-unhealthy status).
