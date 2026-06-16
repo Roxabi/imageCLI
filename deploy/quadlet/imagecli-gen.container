@@ -38,7 +38,9 @@ Environment=IMAGECLI_BLOBSTORE_URL=http://roxabituwer:8449
 Volume=%h/.roxabi/imagecli/weights:/home/imagecli/.roxabi/imagecli/weights:ro,Z
 # Engine override without rebuilding the image (see Dockerfile.gen CMD).
 Environment=IMAGECLI_ENGINE=flux2-klein
-HealthCmd=pgrep -f "imagecli nats-serve"
+# Podman Quadlet ≤5.7.0 strips a trailing double-quote from HealthCmd → unterminated shell
+# string → false-unhealthy even when the service is running fine. End with a non-quote token.
+HealthCmd=pgrep -f "imagecli nats-serve" || exit 1
 HealthInterval=30s
 # Grace for diffusion model cold-load (FLUX/SD3.5 weights + CUDA init) before health failures count.
 HealthStartPeriod=120s
