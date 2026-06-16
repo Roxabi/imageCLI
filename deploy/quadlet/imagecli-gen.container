@@ -42,6 +42,8 @@ Environment=IMAGECLI_ENGINE=flux2-klein
 # string → false-unhealthy even when the service is running fine. End with a non-quote token.
 HealthCmd=pgrep -f "imagecli nats-serve" || exit 1
 HealthInterval=30s
+# Grace for diffusion model cold-load (FLUX/SD3.5 weights + CUDA init) before health failures count.
+HealthStartPeriod=120s
 NoNewPrivileges=true
 DropCapability=all
 
