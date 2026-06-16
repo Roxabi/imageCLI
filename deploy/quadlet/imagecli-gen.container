@@ -40,6 +40,8 @@ Volume=%h/.roxabi/imagecli/weights:/home/imagecli/.roxabi/imagecli/weights:ro,Z
 Environment=IMAGECLI_ENGINE=flux2-klein
 HealthCmd=pgrep -f "imagecli nats-serve"
 HealthInterval=30s
+# Grace for diffusion model cold-load (FLUX/SD3.5 weights + CUDA init) before health failures count.
+HealthStartPeriod=120s
 NoNewPrivileges=true
 DropCapability=all
 
