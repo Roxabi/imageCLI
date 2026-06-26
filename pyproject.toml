@@ -47,7 +47,7 @@ explicit = true
 torch = [{ index = "pytorch-cu130" }]
 torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
-roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "feat/roxabi-satellite" }
+roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "staging" }
 
 [tool.uv]
 override-dependencies = [
