@@ -6,16 +6,16 @@ import threading
 
 from roxabi_blobs.http_store import HttpBlobStore
 
-_INSTANCE: HttpBlobStore | None = None
+_blobstore_instance: HttpBlobStore | None = None
 _LOCK = threading.Lock()
 
 
 def get_blobstore() -> HttpBlobStore:
     """Return process-local HttpBlobStore, creating from config on first call."""
-    global _INSTANCE
-    if _INSTANCE is None:
+    global _blobstore_instance
+    if _blobstore_instance is None:
         with _LOCK:
-            if _INSTANCE is None:
+            if _blobstore_instance is None:
                 from imagecli.config import load_blobstore_config
 
                 cfg = load_blobstore_config()
@@ -24,12 +24,14 @@ def get_blobstore() -> HttpBlobStore:
                         "blobstore token not configured — set IMAGECLI_BLOBSTORE_TOKEN_PATH, "
                         "imagecli.toml [blobstore].token, or IMAGECLI_BLOBSTORE_TOKEN"
                     )
-                _INSTANCE = HttpBlobStore(base_url=cfg["endpoint"], token=cfg["token"])
-    return _INSTANCE
+                _blobstore_instance = HttpBlobStore(
+                    base_url=cfg["endpoint"], token=cfg["token"]
+                )
+    return _blobstore_instance
 
 
 def reset_blobstore_for_tests() -> None:
     """Reset singleton between tests."""
-    global _INSTANCE
+    global _blobstore_instance
     with _LOCK:
-        _INSTANCE = None
+        _blobstore_instance = None
