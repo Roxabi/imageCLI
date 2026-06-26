@@ -25,25 +25,10 @@ def serve(
 
 
 def _init_blob_store() -> BlobStore:
-    """Instantiate HttpBlobStore from config (ADR-067, #97). Fail-fast on missing token.
+    """Return the shared HttpBlobStore singleton (ADR-067, #97)."""
+    from imagecli.nats.blobs import get_blobstore
 
-    Sources for the token (highest precedence first):
-      1. file at ``IMAGECLI_BLOBSTORE_TOKEN_PATH`` (Quadlet mount-type secret)
-      2. ``imagecli.toml [blobstore].token``
-      3. ``IMAGECLI_BLOBSTORE_TOKEN`` env var
-    Endpoint defaults to ``http://roxabituwer:8449`` (M₁ lyra-blobstore).
-    """
-    from imagecli.config import load_blobstore_config
-    from roxabi_blobs.http_store import HttpBlobStore
-
-    cfg = load_blobstore_config()
-    if cfg["token"] is None:
-        raise RuntimeError(
-            "blobstore token not configured — mount the Quadlet secret "
-            "'imagecli-blobstore-token' (with IMAGECLI_BLOBSTORE_TOKEN_PATH set to its mount), "
-            "or set imagecli.toml [blobstore].token, or IMAGECLI_BLOBSTORE_TOKEN env var."
-        )
-    return HttpBlobStore(base_url=cfg["endpoint"], token=cfg["token"])
+    return get_blobstore()
 
 
 async def _probe_blobstore(endpoint: str) -> None:

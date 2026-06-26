@@ -12,9 +12,9 @@ from typing import Any
 from roxabi_blobs.protocol import BlobStore
 from roxabi_contracts.blob_ref import BlobRef as WireBlobRef
 from roxabi_contracts.envelope import CONTRACT_VERSION
-from roxabi_contracts.errors import WorkerError
 from roxabi_contracts.image import SUBJECTS, ImageResponse
 from roxabi_nats import NatsAdapterBase
+from roxabi_satellite.image.replies import build_image_error_reply
 
 from imagecli.nats.validators import (
     _map_exception_to_error,
@@ -26,31 +26,6 @@ from imagecli.nats.validators import (
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-
-# Map legacy free-text error codes (kept for backward compat in `error: str`)
-# to structured WorkerError fields. `default_retryable` follows KNOWN_CODES
-# in roxabi_contracts.errors. Unmapped codes fall back to worker.internal.
-#
-# `delivery_failed` covers an OSError moving the generated file into
-# nats_out/ — generation succeeded but persistence failed. There is no
-# `image.delivery_failed` in KNOWN_CODES yet (request upstream), so we use
-# `worker.internal` per its docstring: "not covered by a more specific code."
-# Hub routing on `retryable=True` works identically to `worker.crash`.
-_WORKER_ERROR_MAP: dict[str, tuple[str, bool]] = {
-    "missing_required_field": ("worker.validation", False),
-    "unknown_engine": ("worker.validation", False),
-    "engine_load_failed": ("image.engine_unavailable", True),
-    "insufficient_resources": ("worker.capacity", True),
-    "generation_failed": ("worker.crash", True),
-    "delivery_failed": ("worker.internal", True),
-}
-
-
-def _make_worker_error(code: str, detail: str | None = None) -> WorkerError:
-    """Build a structured WorkerError from a legacy free-text error code."""
-    canonical, retryable = _WORKER_ERROR_MAP.get(code, ("worker.internal", True))
-    return WorkerError(code=canonical, message=code, retryable=retryable, detail=detail)
-
 
 class ImageNatsAdapter(NatsAdapterBase):
     """NATS adapter for image generation requests from Lyra hub.
@@ -70,7 +45,7 @@ class ImageNatsAdapter(NatsAdapterBase):
     ) -> None:
         super().__init__(
             subject=SUBJECTS.image_request,
-            queue_group="IMAGE_WORKERS",
+            queue_group=SUBJECTS.image_workers,
             envelope_name="image",
             schema_version=SCHEMA_VERSION,
             heartbeat_subject=SUBJECTS.image_heartbeat,
@@ -305,38 +280,16 @@ class ImageNatsAdapter(NatsAdapterBase):
         WorkerError`` field (for v0.4.x consumers that route on canonical codes
         + retryability).
         """
-        worker_err = _make_worker_error(error, error_detail)
-        # ImageResponse.request_id is min_length=1; some failure paths reach here
-        # before request_id is known (e.g. malformed envelope). Use
-        # model_construct to skip validation in that single edge case — mirrors
-        # the voiceCLI _err_tts pattern.
-        safe_trace = trace_id or "unknown"
-        now = datetime.now(timezone.utc)
-        # hoisted dict[str, Any] — see success-path note on inline-spread pyright limits
-        job_kw: dict[str, Any] = {"job_id": job_id} if job_id is not None else {}
-        if request_id:
-            resp = ImageResponse(
-                contract_version=CONTRACT_VERSION,
-                trace_id=safe_trace,
-                issued_at=now,
+        await self.reply(
+            msg,
+            build_image_error_reply(
+                trace_id=trace_id,
                 request_id=request_id,
-                ok=False,
                 error=error,
-                worker_error=worker_err,
-                **job_kw,
-            )
-        else:
-            resp = ImageResponse.model_construct(
-                contract_version=CONTRACT_VERSION,
-                trace_id=safe_trace,
-                issued_at=now,
-                request_id="",
-                ok=False,
-                error=error,
-                worker_error=worker_err,
-                **job_kw,
-            )
-        await self.reply(msg, resp.model_dump_json(exclude_none=True).encode())
+                error_detail=error_detail,
+                job_id=job_id,
+            ),
+        )
 
     def heartbeat_payload(self) -> dict:
         """Extend base heartbeat per factory.image contract (see roxabi_contracts.image.models.Heartbeat)."""

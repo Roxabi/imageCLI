@@ -50,6 +50,10 @@ def test_adapter_binds_subjects_from_contracts() -> None:
         f"adapter._heartbeat_subject ({adapter._heartbeat_subject!r}) must equal "
         f"SUBJECTS.image_heartbeat ({SUBJECTS.image_heartbeat!r})."
     )
+    assert adapter.queue_group == SUBJECTS.image_workers, (
+        f"adapter.queue_group ({adapter.queue_group!r}) must equal "
+        f"SUBJECTS.image_workers ({SUBJECTS.image_workers!r})."
+    )
 
 
 def _require_imports() -> None:
