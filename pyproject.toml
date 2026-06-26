@@ -20,9 +20,7 @@ dependencies = [
     "einops>=0.8.2",
     "facexlib>=0.3.0",
     "peft>=0.18.1",
-    "roxabi-nats",
-    "roxabi-contracts",
-    "roxabi-blobs",
+    "roxabi-satellite",
     "httpx>=0.27",
 ]
 
@@ -49,9 +47,7 @@ explicit = true
 torch = [{ index = "pytorch-cu130" }]
 torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
-roxabi-nats = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-nats", branch = "staging" }
-roxabi-contracts = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-contracts", branch = "staging" }
-roxabi-blobs = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-blobs", branch = "staging" }
+roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "feat/roxabi-satellite" }
 
 [tool.uv]
 override-dependencies = [
