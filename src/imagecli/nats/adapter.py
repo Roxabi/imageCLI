@@ -61,7 +61,7 @@ class ImageNatsAdapter(NatsAdapterBase):
             wait_ready=False,  # worker semantics — see NatsAdapterBase docstring
             lifecycle_hooks=lifecycle_hooks,
         )
-        self._otel_work_attrs: dict[str, str] = {}
+        self._otel_work_attrs: dict[str, dict[str, str]] = {}
         self.default_engine = default_engine
         # ADR-067: every successful image reply carries a BlobRef built by put().
         self._blob_store: BlobStore = blob_store
@@ -77,13 +77,14 @@ class ImageNatsAdapter(NatsAdapterBase):
         attrs: dict[str, str] = {
             ATTR_ENGINE: str(payload.get("engine") or self.default_engine),
         }
-        if self._otel_work_attrs:
-            attrs.update(self._otel_work_attrs)
+        job_id = str(payload.get("job_id") or "")
+        work = self._otel_work_attrs.pop(job_id, None) if job_id else None
+        if work:
+            attrs.update(work)
         return attrs
 
     async def handle(self, msg: Any, payload: dict) -> None:
         """Process an image generation request per ADR-046 contract."""
-        self._otel_work_attrs = {}
         request_id = payload.get("request_id", "")
         # trace_id is required min_length=1 on the response envelope; fall back
         # to request_id (then "unknown") so error paths can still produce a
@@ -233,8 +234,8 @@ class ImageNatsAdapter(NatsAdapterBase):
                     filename=f"{request_id or 'unknown'}.{fmt}",
                 )
                 wire_blob_ref = WireBlobRef.from_store_ref(store_ref)
-                if wire_blob_ref.store_key:
-                    self._otel_work_attrs = {
+                if wire_blob_ref.store_key and job_id:
+                    self._otel_work_attrs[job_id] = {
                         ATTR_BLOB_REF_OUT: wire_blob_ref.store_key,
                     }
                 if not wire_blob_ref.store_key:

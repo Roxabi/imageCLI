@@ -20,7 +20,7 @@ class TestImageTelemetryHooks:
             blob_store=type("BS", (), {"put": None})(),  # type: ignore[arg-type]
             lifecycle_hooks=recorder.hooks("imagecli-gen"),
         )
-        adapter._otel_work_attrs = {ATTR_BLOB_REF_OUT: "image/out/key"}
+        adapter._otel_work_attrs[_JOB] = {ATTR_BLOB_REF_OUT: "image/out/key"}
         msg = type("M", (), {"subject": "factory.image.generate.request"})()
         payload = {
             "trace_id": _TRACE,
