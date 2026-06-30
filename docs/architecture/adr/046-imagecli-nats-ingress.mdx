@@ -39,7 +39,7 @@ This ADR assumes Python 3.12 (`requires-python = ">=3.12,<3.13"`). Rationale:
 
 ### Architecture
 
-`ImageNatsAdapter` subclasses `NatsAdapterBase` from the `roxabi-nats` SDK. It runs as a standalone supervisor process (`imagecli_gen`), subscribes to `lyra.image.generate.request`, and responds to the reply-to inbox. The hub never imports imageCLI — this process does.
+`ImageNatsAdapter` subclasses `NatsAdapterBase` from the `roxabi-nats` SDK. It runs as a standalone Quadlet worker (`imagecli-gen`), subscribes to `lyra.image.generate.request`, and responds to the reply-to inbox. The hub never imports imageCLI — this process does.
 
 ```
 Lyra hub (no imageCLI import)
