@@ -21,6 +21,8 @@ dependencies = [
     "facexlib>=0.3.0",
     "peft>=0.18.1",
     "roxabi-satellite",
+    "roxabi-nats",
+    "roxabi-otel",
     "httpx>=0.27",
 ]
 
@@ -47,7 +49,10 @@ explicit = true
 torch = [{ index = "pytorch-cu130" }]
 torchvision = [{ index = "pytorch-cu130" }]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
-roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "staging" }
+roxabi-contracts = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-contracts", branch = "feat/2069-otel-raw-telemetry" }
+roxabi-nats = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-nats", branch = "feat/2069-otel-raw-telemetry" }
+roxabi-otel = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-otel", branch = "feat/2069-otel-raw-telemetry" }
+roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "feat/2069-otel-raw-telemetry" }
 
 [tool.uv]
 override-dependencies = [
