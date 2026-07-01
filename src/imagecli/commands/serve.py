@@ -70,6 +70,7 @@ def nats_serve(
 
     from imagecli.config import load_blobstore_config
     from imagecli.nats import ImageNatsAdapter
+    from imagecli.obs.otel_wiring import build_lifecycle_hooks
 
     # ADR-067 (#97): instantiate the cross-host BlobStore, run the warn-only
     # connectivity probe, then wire the store into the adapter so handle()
@@ -78,7 +79,11 @@ def nats_serve(
     cfg = load_blobstore_config()
     asyncio.run(_probe_blobstore(cfg["endpoint"]))
 
-    adapter = ImageNatsAdapter(default_engine=engine, blob_store=blob_store)
+    adapter = ImageNatsAdapter(
+        default_engine=engine,
+        blob_store=blob_store,
+        lifecycle_hooks=build_lifecycle_hooks("imagecli-gen"),
+    )
     try:
         asyncio.run(adapter.run(nats_url=nats_url))
     except KeyboardInterrupt:

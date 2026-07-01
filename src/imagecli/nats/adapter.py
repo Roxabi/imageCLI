@@ -13,6 +13,11 @@ from roxabi_blobs.protocol import BlobStore
 from roxabi_contracts.blob_ref import BlobRef as WireBlobRef
 from roxabi_contracts.envelope import CONTRACT_VERSION
 from roxabi_contracts.image import SUBJECTS, ImageResponse
+from roxabi_contracts.telemetry import (
+    ATTR_BLOB_REF_OUT,
+    ATTR_ENGINE,
+    MessageLifecycleHooks,
+)
 from roxabi_nats import NatsAdapterBase
 from roxabi_satellite.image.replies import build_image_error_reply
 
@@ -42,6 +47,7 @@ class ImageNatsAdapter(NatsAdapterBase):
         max_concurrent: int = 1,
         heartbeat_interval: float = 5.0,
         drain_timeout: float = 30.0,
+        lifecycle_hooks: MessageLifecycleHooks | None = None,
     ) -> None:
         super().__init__(
             subject=SUBJECTS.image_request,
@@ -53,7 +59,9 @@ class ImageNatsAdapter(NatsAdapterBase):
             drain_timeout=drain_timeout,
             inbox_prefix="_inbox.imagecli-image",
             wait_ready=False,  # worker semantics — see NatsAdapterBase docstring
+            lifecycle_hooks=lifecycle_hooks,
         )
+        self._otel_work_attrs: dict[str, dict[str, str]] = {}
         self.default_engine = default_engine
         # ADR-067: every successful image reply carries a BlobRef built by put().
         self._blob_store: BlobStore = blob_store
@@ -61,6 +69,19 @@ class ImageNatsAdapter(NatsAdapterBase):
         self._sem = asyncio.Semaphore(max_concurrent)
         self._engine_loaded: str | None = None
         self._engine_instance: Any = None  # Cached engine for reuse
+
+    def telemetry_attributes(
+        self, payload: dict, result: object | None
+    ) -> dict[str, str]:
+        del result
+        attrs: dict[str, str] = {
+            ATTR_ENGINE: str(payload.get("engine") or self.default_engine),
+        }
+        job_id = str(payload.get("job_id") or "")
+        work = self._otel_work_attrs.pop(job_id, None) if job_id else None
+        if work:
+            attrs.update(work)
+        return attrs
 
     async def handle(self, msg: Any, payload: dict) -> None:
         """Process an image generation request per ADR-046 contract."""
@@ -213,6 +234,10 @@ class ImageNatsAdapter(NatsAdapterBase):
                     filename=f"{request_id or 'unknown'}.{fmt}",
                 )
                 wire_blob_ref = WireBlobRef.from_store_ref(store_ref)
+                if wire_blob_ref.store_key and job_id:
+                    self._otel_work_attrs[job_id] = {
+                        ATTR_BLOB_REF_OUT: wire_blob_ref.store_key,
+                    }
                 if not wire_blob_ref.store_key:
                     raise ValueError(
                         "BlobStore.put returned an empty store_key; "
