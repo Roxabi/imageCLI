@@ -28,8 +28,10 @@ Secret=imagecli-blobstore-token,type=mount,target=imagecli-blobstore-token,uid=1
 AddDevice=nvidia.com/gpu=all
 # UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
 UserNS=keep-id:uid=1503,gid=1503
-# Connect to factory-nats on roxabi.network (factory.* wire, #1670 lockstep).
-Environment=NATS_URL=nats://factory-nats:4222
+# Connect to factory-nats on M1 over the tailnet (imageCLI runs on M2/image-worker;
+# `factory-nats` container-DNS only resolves on M1's roxabi.network). Mirrors the
+# blobstore/OTEL endpoints below (roxabituwer:*) and llmCLI's M2 worker (#audit-2026-07-01).
+Environment=NATS_URL=nats://roxabituwer:4222
 Environment=NATS_NKEY_SEED_PATH=/run/secrets/imagecli-nats-gen.seed
 Environment=IMAGECLI_BLOBSTORE_TOKEN_PATH=/run/secrets/imagecli-blobstore-token
 Environment=IMAGECLI_BLOBSTORE_URL=http://roxabituwer:8449
