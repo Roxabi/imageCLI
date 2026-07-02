@@ -1,0 +1,76 @@
+---
+title: "ADR-048: engine.py split into engine/ subpackage"
+description: Promote the flat engine.py module to a 4-module subpackage to resolve the 300-line file-length gate and clarify internal boundaries.
+---
+
+## Status
+
+Accepted
+
+## Context
+
+`src/imagecli/engine.py` had grown to contain four distinct responsibilities:
+
+1. `ImageEngine` ABC + `preflight_check` (domain contract)
+2. Helper utilities: `EngineCapabilities`, `InsufficientResourcesError`, `get_compute_capability`, `warn_ignored_params`, `quantize_transformer`, `TwoPhaseMixin` (pure helpers, no ABC dependency at runtime)
+3. Engine registry + factory: `_get_registry`, `get_engine`, `list_engines` (concrete engine wiring)
+4. Module-level side effects: RAM cap via `resource.setrlimit`, `_tf32_set` flag
+
+The file exceeded the project's 300-line quality gate, carrying an exemption at `src/imagecli` in `tools/folder_exemptions.txt` (issue #65). All external callers — `imagecli/__init__.py`, `commands/`, `nats/`, `model_registry.py`, every `engines/*.py` — imported from `imagecli.engine`, making the public API surface stable and well-established.
+
+A secondary concern was startup cost: the original file imported `imagecli.lora_spec` unconditionally. Concrete engine classes (and their transitive `torch`/`diffusers` imports) were already deferred, but any growth in top-level engine.py imports would tighten that boundary.
+
+## Options Considered
+
+### Option A: Keep flat file, add permanent exemption
+
+- **Pros:** Zero migration cost; no import graph changes.
+- **Cons:** Exemption accumulates permanently; internal boundaries invisible; file will keep growing as new capabilities are added (LoRA, pivotal embeddings). Does not address the underlying cohesion problem.
+
+### Option B: Promote engine.py → engine/ subpackage with backward-compatible __init__.py
+
+- **Pros:** Separates the four responsibilities into focused modules (`base.py`, `helpers.py`, `registry.py`, `__init__.py` shim). Removes the file-length exemption. Public API is unchanged — all callers continue to use `from imagecli.engine import X`. Enables isolated testing of helpers without importing the ABC. Registry isolation prevents concrete-engine imports from occurring transitively at subpackage load time.
+- **Cons:** One additional package directory in `src/imagecli/engine/`. The double-import form in `base.py` (alias + selective names from helpers) is a minor stylistic inconsistency left for a follow-up cleanup. `_get_registry` remains semi-public via the `__init__.py` re-export, which `model_registry.py` relies on.
+
+### Option C: Split into three top-level modules (engine_base.py, engine_helpers.py, engine_registry.py)
+
+- **Pros:** Flat layout; no packaging change.
+- **Cons:** The pre-split state (reversed by this PR) showed this approach produces a cluttered top-level namespace. Callers must be updated if any internal name moves. No improvement to startup cost.
+
+## Decision
+
+Option B. `engine.py` is renamed to `engine/__init__.py`, and three internal modules are extracted:
+
+- `engine/base.py` — `ImageEngine` ABC, `preflight_check`, `_UNSET` sentinel
+- `engine/helpers.py` — all stateless utilities and the two process-global flags (`_tf32_set`, RAM cap side-effect)
+- `engine/registry.py` — `_get_registry` (deferred imports), `get_engine`, `list_engines`
+- `engine/__init__.py` — backward-compatible re-export shim; `__all__` lists every name that was previously importable from `imagecli.engine`
+
+The import graph within the subpackage is:
+
+```
+__init__  →  base, helpers, registry
+base      →  helpers (runtime), imagecli.lora_spec (runtime), imagecli.pivotal (deferred)
+helpers   →  base (TYPE_CHECKING only — no runtime cycle)
+registry  →  base (runtime), imagecli.lora_spec (runtime), imagecli.engines.* (deferred)
+```
+
+The `TYPE_CHECKING`-guarded import in `helpers.py` is the mechanism that keeps the graph acyclic at runtime despite the bidirectional annotation dependency between `helpers` and `base`.
+
+## Consequences
+
+### Positive
+
+- File-length exemption for `src/imagecli` in `tools/folder_exemptions.txt` is removed (issue #65 closed).
+- Each module has a single clear responsibility; `base.py` can be read and tested without pulling in registry machinery.
+- Startup is unaffected: no new top-level imports added; concrete engine imports remain deferred inside `_get_registry()`.
+- All existing callers (`from imagecli.engine import X`) continue to work without modification.
+
+### Negative
+
+- `_get_registry` is still re-exported from `__init__.py` with a `# noqa: F401` suppression for `model_registry.py`. This is a known coupling; tracked for cleanup alongside the public `engine_classes()` API proposal.
+- `base.py` uses both `from . import helpers as _h` and `from .helpers import (...)` — a double-import form introduced to preserve access to `_h._tf32_set`. A follow-up should consolidate to a single import style.
+
+### Neutral
+
+- `folder_exemptions.txt` may need re-evaluation if the `folder_size` gate counts subdirectories as entries for `src/imagecli/` (which now contains `engine/` as a subdirectory). Gate behavior should be confirmed post-merge.

@@ -1,0 +1,3 @@
+# dev-core plugin configuration
+# 3-tier fallback: this file → process.env → gh CLI (github_repo only)
+github_repo: Roxabi/imageCLI

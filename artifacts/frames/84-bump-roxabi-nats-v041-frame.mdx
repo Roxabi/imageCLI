@@ -1,0 +1,52 @@
+---
+title: Bump roxabi-nats v0.1.0 → v0.4.1 + adopt wait_ready=False worker opt-out
+issue: 84
+status: approved
+tier: F-lite
+date: 2026-05-20
+---
+
+## Problem
+
+`imageCLI`'s `roxabi-nats` dependency is pinned to `tag = "roxabi-nats/v0.1.0"` while the rest of the Roxabi NATS ecosystem has moved forward four minor versions to `v0.4.1`. The concrete trigger: `ImageNatsAdapter` is a worker (RPC responder for `lyra.image.generate.request`) and is currently emitting JetStream KV ACL denial warnings on startup because workers don't carry the `$JS.API.>` grants required by the readiness probe. Lyra `v0.4.1` (Roxabi/lyra#1285) added a `wait_ready` kwarg precisely so worker-class adapters can opt out of this probe.
+
+The fix on the adapter is one line (`wait_ready=False`), but reaching that surface requires bumping the dep across four minor versions with several contract changes in between: WorkerError envelope across all NATS reply contracts, KV-based readiness probe replacing request/reply, per-adapter `type_registry` / `inbox_prefix` / `identity_name` API surface, and the `roxabi-contracts` package split (ADR-059). Sibling repos (`llmCLI`, `voiceCLI`) tracked `branch = "staging"` and rode the upgrade transparently; `imageCLI`'s tag pin means this one needs deliberate validation.
+
+## Who
+
+- **Primary:** `imagecli_gen` operator (M₁ hub) — startup logs currently spam ACL denials; reply contract drift would silently break Lyra's image flow.
+- **Secondary:** Lyra (consumer of `lyra.image.generate.*`) and the rest of the Roxabi NATS bus — depends on imageCLI conforming to the current WorkerError envelope.
+
+## Constraints
+
+- `roxabi-nats` jumps four minor versions; v0.1 → v0.4 spans breaking-leaning contract changes
+- `roxabi-contracts` likely required transitively (ADR-059 split)
+- Must preserve current daemon RPC semantics (`lyra.image.generate.request` / response shape)
+- No regression in NATS adapter test suite
+- Only the adapter surface should change — no engine, CLI, or output-path refactoring
+
+## Out of Scope
+
+- Any feature work on image generation
+- Refactoring beyond what the dep bump strictly requires
+- Migration of CLI / engine / daemon internals not touched by the new adapter surface
+- Touching `llmCLI` / `voiceCLI` parity (they already track `branch = "staging"`)
+
+## Premise Validity
+
+**Success in 6 months:** `ImageNatsAdapter` starts clean — no ACL denial warnings in `imagecli_gen` logs — error replies conform to the WorkerError envelope, and `imageCLI` stays in lockstep with `lyra`, `llmCLI`, `voiceCLI` on the current `roxabi-nats` contract.
+
+**Failure in 6 months:** ACL denial warnings still appear in `imagecli_gen` startup logs after merge, OR image RPC responses fail to conform to the WorkerError envelope and break Lyra's image flow within one sprint cycle.
+
+**Simplest alternative:** Add `wait_ready=False` to the adapter without bumping the dep.
+**Why not simplest:** The kwarg does not exist in `roxabi-nats v0.1.0` — it was introduced in the v0.2.x → v0.4.x line. The simpler path is not reachable; the version bump is the prerequisite.
+
+## Complexity
+
+**Tier: F-lite** — Single domain (NATS adapter), clear scope (one dep + one file), but four minor versions of upstream contract drift to validate.
+
+Signals observed:
+- Single file substantively modified (`src/imagecli/nats/adapter.py`) plus `pyproject.toml`
+- One domain (NATS messaging), no new architecture
+- Upstream contract changes require deliberate validation (WorkerError envelope, KV readiness, per-adapter API surface, contracts package split) — pushes above S
+- Reference implementations already exist in sibling repos (`llmCLI`, `voiceCLI`) — bounds the unknowns

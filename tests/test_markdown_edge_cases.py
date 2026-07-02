@@ -86,7 +86,7 @@ def test_yaml_unavailable_fallback(tmp_path: Path):
     """The _HAS_YAML=False fallback parser must still extract key: value pairs."""
     md = tmp_path / "fallback.md"
     md.write_text("---\nengine: sd35\nwidth: 768\n---\n\nA sunset.\n")
-    with patch("imagecli.markdown._HAS_YAML", False):
+    with patch("imagecli.markdown._has_yaml", False):
         doc = parse_prompt_file(md)
     # Fallback parser returns raw strings (no type coercion for numeric fields)
     assert doc.engine == "sd35"

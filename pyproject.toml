@@ -1,21 +1,29 @@
 [project]
 name = "imagecli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unified CLI for local image generation — FLUX.2-klein, FLUX.1-dev, SD3.5 backends"
-license = "MIT"
-requires-python = ">=3.11,<3.13"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "typer[all]>=0.12",
     "diffusers>=0.33",
     "transformers>=4.48",
-    "accelerate>=1.0",
-    "sentencepiece>=0.2",
+    "accelerate>=1.13.0",
+    "sentencepiece>=0.2.1",
     "protobuf>=5.0",
     "Pillow>=10.0",
-    "torch>=2.7",
-    "torchvision>=0.20",
+    "torch>=2.11",
+    "torchvision>=0.22",
     "optimum[quanto]>=1.24",
     "tomli>=2.0; python_version < '3.11'",
+    "gguf>=0.18.0",
+    "einops>=0.8.2",
+    "facexlib>=0.3.0",
+    "peft>=0.18.1",
+    "roxabi-satellite",
+    "roxabi-nats",
+    "roxabi-otel",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -33,30 +41,74 @@ target-version = "py312"
 line-length = 100
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu128" }]
-torchvision = [{ index = "pytorch-cu128" }]
-diffusers = { git = "https://github.com/huggingface/diffusers.git" }
+torch = [{ index = "pytorch-cu130" }]
+torchvision = [{ index = "pytorch-cu130" }]
+diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.37.1" }
+roxabi-contracts = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-contracts", branch = "staging" }
+roxabi-nats = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-nats", branch = "staging" }
+roxabi-otel = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-otel", branch = "staging" }
+roxabi-satellite = { git = "https://github.com/Roxabi/roxabi-factory.git", subdirectory = "packages/roxabi-satellite", branch = "staging" }
 
 [tool.uv]
 override-dependencies = [
-    "torch>=2.7",
-    "torchvision>=0.20",
-    # numpy compat
-    "numpy>=1.26",
+    "torch>=2.11",
+    "torchvision>=0.22",
+    # numpy<2 required by insightface (compiled against 1.x ABI)
+    "numpy>=1.26,<3.0",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+reportPrivateUsage = "none"
+# torch/diffusers/transformers have no complete stubs — suppress unknowns from untyped deps
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportMissingParameterType = "none"
+reportUnknownLambdaType = "none"
+reportMissingTypeArgument = "none"
+# torch exports dtypes/ops via __init__ but stubs don't re-export them
+reportPrivateImportUsage = "none"
 
 [dependency-groups]
 dev = [
     "ruff",
     "pytest",
+    "pytest-asyncio",
     "pre-commit>=4.5.1",
     "pip-licenses>=5.5.1",
+    "import-linter>=2.0,<3.0",
+    "pyright>=1.1.408",
+    "pytest-cov>=7.1.0",
+    "radon>=6.0.1",
+]
+fp8 = [
+    "torchao>=0.17.0",
+]
+fp4 = [
+    "comfy-kitchen[cublas]>=0.2.7",
+]
+pulid = [
+    "insightface>=0.7.3",
+    "onnxruntime-gpu>=1.16.0",
+    "open-clip-torch>=3.3.0",
+    "safetensors>=0.4.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.26,<3.0",
+    "ml_dtypes>=0.4.0",
 ]

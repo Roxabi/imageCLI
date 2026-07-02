@@ -1,26 +1,147 @@
-"""FLUX.2-klein-4B engine — default, fits in ~13GB VRAM."""
+"""FLUX.2-klein-4B engine — default, FP8 quantized.
+
+Single generate: CPU offload (~8 GB peak, no compile, fastest for 1-2 images).
+Batch: 2-phase (encode all prompts → generate all images, ~4 GB peak in phase 2, compiled).
+"""
 
 from __future__ import annotations
 
-from imagecli.engine import ImageEngine
+import logging
+
+from imagecli.engine import EngineCapabilities
+from imagecli.engines._two_phase_base import TwoPhaseBase
+from imagecli.engines.helpers import set_execution_device
+
+logger = logging.getLogger(__name__)
 
 
-class Flux2KleinEngine(ImageEngine):
+class Flux2KleinEngine(TwoPhaseBase):
     name = "flux2-klein"
     description = "FLUX.2-klein-4B — best quality for 16GB VRAM (Black Forest Labs, Nov 2025)"
     model_id = "black-forest-labs/FLUX.2-klein-4B"
-    vram_gb = 13.0
+    vram_gb = 8.0  # FP8 + CPU offload, peak ~7.84 GB
+    capabilities = EngineCapabilities(negative_prompt=False)
 
-    def _load(self):
+    def _load_pipeline(self):
+        """Shared setup: load from pretrained, quantize transformer to FP8."""
         if self._pipe is not None:
             return
+
         import torch
         from diffusers import Flux2KleinPipeline
+        from optimum.quanto import freeze, qfloat8, quantize  # type: ignore[import-untyped]
 
-        print(f"Loading {self.model_id} …")
+        logger.info("Loading %s...", self.model_id)
         self._pipe = Flux2KleinPipeline.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
-        self._finalize_load(self._pipe)
-        print("Model ready.")
+        # LoRA must be loaded BEFORE quantization — weights are fused into bf16 base,
+        # then quantized together. Loading after quantization silently has no effect.
+        if self.loras:
+            adapter_names = []
+            for i, spec in enumerate(self.loras):
+                name = f"lora_{i}"
+                logger.info("Loading LoRA %d/%d from %s...", i + 1, len(self.loras), spec.path)
+                self._pipe.load_lora_weights(spec.path, adapter_name=name)  # type: ignore[attr-defined]
+                adapter_names.append(name)
+            if len(adapter_names) > 1:
+                # N≥2: adapters have distinct weights → set_adapters carries
+                # per-adapter scale, then fuse_lora(1.0) applies no global
+                # multiplier on top.
+                self._pipe.set_adapters(  # type: ignore[attr-defined]
+                    adapter_names, adapter_weights=[s.scale for s in self.loras]
+                )
+                logger.info(
+                    "Set %d adapters with scales %s.",
+                    len(adapter_names),
+                    [s.scale for s in self.loras],
+                )
+            # N=1: diffusers' fuse_lora(lora_scale=s) applies a global scalar
+            # multiplier across the only active adapter — equivalent to
+            # set_adapters(["lora_0"], [s]) + fuse_lora(1.0) for a single
+            # adapter (the per-adapter weight and the global multiplier
+            # combine multiplicatively, so scale*1.0 == 1.0*scale at a single
+            # adapter). This is the pre-#34 single-LoRA behavior preserved.
+            fuse_scale = self.loras[0].scale if len(self.loras) == 1 else 1.0
+            self._pipe.fuse_lora(lora_scale=fuse_scale)  # type: ignore[attr-defined]
+            self._pipe.unload_lora_weights()  # type: ignore[attr-defined]
+            logger.info("LoRA(s) fused into base weights.")
+        # Pivotal tuning: load trained trigger vectors into the TE BEFORE
+        # transformer quantization. Touches tokenizer + embed_tokens only;
+        # disjoint from LoRA fuse/unload and transformer quantize.
+        self._apply_pivotal_embeddings()
+        # Quantize transformer to FP8: 7.75 GB → ~3.9 GB.
+        logger.info("Quantizing transformer to float8...")
+        quantize(self._pipe.transformer, weights=qfloat8)  # type: ignore[attr-defined]
+        freeze(self._pipe.transformer)  # type: ignore[attr-defined]
+        # Marlin FP8 GEMM kernel requires contiguous input
+        from optimum.quanto.nn import QLinear  # type: ignore[import-untyped]
+
+        _orig_fwd = QLinear.forward
+
+        def _fwd_cont(self, input):
+            return _orig_fwd(self, input.contiguous())
+
+        QLinear.forward = _fwd_cont
+
+    def _load(self):
+        """Single-image mode: CPU offload, no compile."""
+        if self._pipe is not None:
+            return
+        self._load_pipeline()
+        assert self._pipe is not None
+        self._pipe.enable_model_cpu_offload()  # type: ignore[attr-defined]
+        self._optimize_pipe(self._pipe, compile=False)  # compile incompatible with offload hooks
+        logger.info("Model ready (CPU offload mode).")
+
+    # ── All-on-GPU batch ─────────────────────────────────────────────────
+
+    def load_all_on_gpu(self):
+        """Load everything to GPU at once (~12 GB). No offloading between phases."""
+        self._load_pipeline()
+        assert self._pipe is not None
+        self._pipe.text_encoder.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
+        set_execution_device(self._pipe)
+        self._optimize_pipe(self._pipe, compile=False)
+        logger.info("All components on GPU (~12 GB) — no phase switching.")
+
+    # ── 2-phase batch ──────────────────────────────────────────────────────
+
+    def load_for_encode(self):
+        """Phase 1 setup: load pipeline, move text encoder to GPU (~8 GB)."""
+        self._load_pipeline()
+        assert self._pipe is not None
+        self._pipe.text_encoder.to("cuda")  # type: ignore[attr-defined]
+        logger.info("Text encoder on GPU — ready for prompt encoding.")
+
+    def encode_prompt(self, prompt: str) -> dict:
+        """Encode a single prompt. Returns embeddings dict (on CPU to free VRAM)."""
+        import torch
+
+        assert self._pipe is not None
+        with torch.inference_mode():
+            prompt_embeds, text_ids = self._pipe.encode_prompt(  # type: ignore[attr-defined]
+                prompt=prompt,
+                device="cuda",
+                num_images_per_prompt=1,
+            )
+        return {
+            "prompt_embeds": prompt_embeds.cpu(),
+            "text_ids": text_ids.cpu(),
+        }
+
+    def start_generation_phase(self):
+        """Phase 2 setup: move transformer + VAE to GPU after encoder teardown."""
+        self._teardown_encoder_phase()
+        assert self._pipe is not None
+
+        # Transformer (~3.9 GB FP8) + VAE (~0.17 GB) → ~4.1 GB on GPU
+        self._pipe.transformer.to("cuda")  # type: ignore[attr-defined]
+        self._pipe.vae.to("cuda")  # type: ignore[attr-defined]
+        set_execution_device(self._pipe)
+        # Skip compile: torch.compile conflicts with QLinear.forward contiguity patch.
+        self._optimize_pipe(self._pipe, compile=False)
+        logger.info("Generation phase ready (transformer + VAE on GPU, ~4 GB).")

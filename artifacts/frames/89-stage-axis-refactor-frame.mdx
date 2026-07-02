@@ -1,0 +1,68 @@
+---
+title: "stage-axis audit findings — TwoPhaseBase + PuLIDMixin + typed errors"
+issue: 89
+status: approved
+tier: F-full
+date: 2026-05-21
+---
+
+## Problem
+
+imageCLI exhibits the strongest N×M cascade pressure of the 3-CLI worker fleet (per lyra #1277 framework, cross-repo audit 2026-05-20). N=9 engines (growing); M=7+ concerns per 2-phase engine file. The hottest zone is the 3-engine quantization family (`flux2-klein` / `flux2-klein-fp8` / `flux2-klein-fp4`): **75% file similarity**, **76 lines word-for-word identical** across all 3 files, **5 duplicated methods × 3 files** (`encode_and_generate`, `generate_from_embeddings`, `encode_prompt`, `load_for_encode`, `start_generation_phase`). Recent refactors (`engine` sub-package split, `helpers.py`, `_pulid/`, `nvfp4/`, `validators.py`) show the team fighting the pattern one file at a time without naming the root cause.
+
+Two additional active anti-patterns: (1) socket-bound daemon leaks `str(exc)` to clients on 3 paths in `daemon_handlers.py` (NATS path correctly typed via `WorkerError`, socket path is the unsanitized fallback); (2) NATS subject literals hardcoded at `nats/adapter.py:23-24` while llmCLI imports `llm.SUBJECTS` from `roxabi-contracts` as reference pattern; PuLID engines duplicate InsightFace + EVA-CLIP loading verbatim at 3 sites.
+
+Why now: the upstream contracts work (lyra #1291, closed 2026-05) has landed on `staging` — `image.SUBJECTS` and `sanitize_for_wire` are ready to consume. A 4th quant variant (anticipated quanto int8 for Ampere) would otherwise copy the 76-line block a 4th time.
+
+## Who
+
+- **Primary:** imageCLI maintainers adding any future engine variant (next quant / next PuLID composition / next LoRA path).
+- **Secondary:**
+  - daemon-socket clients (currently receive raw `str(exc)` — exception types, paths, traces).
+  - 3-CLI fleet maintainers (`roxabi-nats` version drift: imageCLI on `tag=v0.4.1`, llmCLI + voiceCLI on `branch=staging` — sibling-fix cascade observed: `wait_ready=False` adopted separately in commits `c241600` (imageCLI) + `b61a998` (voiceCLI)).
+  - Future authors of any new NATS-routed CLI (`image.SUBJECTS` becomes the reference for the namespace).
+
+## Constraints
+
+- ¬external contract changes — NATS schema, CLI flags, frontmatter format all preserved.
+- Preserve all 9 existing engines (`flux2-klein` default, plus fp8 / fp4 / pulid trio / flux1-dev / flux1-schnell / sd35).
+- Cross-repo dependency ordering: switch `roxabi-nats` `tag → branch=staging` is a **precondition** for consuming `sanitize_for_wire` (helper landed in commit `acbd2b6e` on staging, post-v0.4.1 tag).
+- Quality gates already enforced via stack.yml: max 300 LOC/file, max 12 files/folder, ruff `L≤100`, py312.
+- ¬touch PuLID forward-method patching internals beyond what is needed for the InsightFace/EVA-CLIP loading extraction; the per-architecture `_extract_id_tokens` (Flux2 vs Flux1) stays separate.
+- Closes: #86 (subsumed — folded into Cross-repo #3, declare `roxabi-contracts` direct dep).
+- Tracks parent: lyra #1277 (stage-axis framework) via lyra #1291 (cross-repo contracts work, closed).
+
+## Out of Scope
+
+- Stage-axis pivot proper (lyra-style 7-phase rewrite) — too heavy for current scale.
+- Replacing `ImageEngine` ABC with stage-pipeline ABC — current ABC is appropriate.
+- `engine/registry.py:61` TODO removing legacy singular-kwargs branch — tracked as #72.
+- Per-architecture PuLID token-extraction unification (Flux2 vs Flux1 are architecturally different; mixin extracts only the InsightFace + EVA-CLIP loading block, ¬the extraction logic).
+- New engines (any 4th quant variant, new LoRA architectures) — out of scope for this issue; the goal is to make adding them cheap.
+- Pre-push lint rule for `str(exc)` (mentioned in audit Cross-repo #4 §3) — defer; the immediate removal makes the rule's first violation visible at code-review.
+
+## Premise Validity
+
+**Success in 6 months:** Adding a 4th quant variant (e.g. quanto int8 for Ampere) or a new PuLID engine costs ≤30 LOC subclass — no copy of the 76-line 2-phase block, no copy of the 7-line InsightFace block. Zero `str(exc)` on socket paths. NATS subjects sourced from `roxabi_contracts.image.SUBJECTS`. `roxabi-nats` aligned to `branch=staging` (no version drift across the 3-CLI fleet); upstream `wait_ready` / contract bumps propagate via `uv sync`.
+
+**Failure in 6 months:** A 4th quant variant ships with another verbatim copy of `encode_and_generate` + `generate_from_embeddings`, OR a daemon error leaks a file path / stack trace over the socket again, OR `roxabi-nats` releases v0.5 with a contract change and imageCLI silently misses it because of the tag pin. Falsifiable conditions, ¬vibes:
+
+- `grep -c "def encode_and_generate" src/imagecli/engines/*.py` > 1 (target: exactly 1, in the base class).
+- `grep -F "str(exc)" src/imagecli/daemon_handlers.py | wc -l` > 0 (target: 0).
+- `grep -E '^\s*roxabi-nats.*tag\s*=' pyproject.toml | wc -l` > 0 (target: 0; must use `branch=`).
+
+**Simplest alternative:** Just do the 4 cross-repo follow-ups — switch pin to `branch=staging`, declare `roxabi-contracts` direct dep, swap 1 `SUBJECT` import, swap 3 `str(exc)` → `sanitize_for_wire`. Skip `TwoPhaseBase`, `PuLIDMixin`, `UnknownEngineError`, `_check_nvfp4_requirements` extraction. Total: ~6 small edits.
+
+**Why not simplest:** Cross-repo-only addresses 4 small leaks but leaves the hottest N×M zone untouched (75% similarity in flux2-klein trio; 76 LOC verbatim × 3 files). The next quant variant (quanto int8 for Ampere is already anticipated; LoRA + NVFP4 is another) would copy 76 lines a 4th time, plus another 7 lines of InsightFace boilerplate if it's a PuLID composition. Per audit, `TwoPhaseBase` extraction alone eliminates ~150 LOC and prevents the 4th copy. The cross-repo work + `TwoPhaseBase` + `PuLIDMixin` together is the **bounded consolidation** the audit recommends; pure cross-repo is the cheap-but-shallow option that locks in the local cascade.
+
+## Complexity
+
+**Tier: F-full** — multi-domain (engines + nats + daemon + pyproject), new patterns introduced (`TwoPhaseBase` ABC, `PuLIDMixin`, typed `UnknownEngineError`), cross-repo dependency ordering, ≥7 distinct change loci.
+
+Signals observed:
+- Issue labeled `size:F-full` (authoritative).
+- Touches 4 distinct domains: `engines/` (3+3 files), `nats/` (1 file), top-level `daemon_handlers.py`, `pyproject.toml`.
+- Introduces 3 new abstractions (`TwoPhaseBase`, `PuLIDMixin`, `UnknownEngineError`) — not pure refactor.
+- 7 distinct change sets (5 local Findings + 4 cross-repo follow-ups, with #86 subsumed inside #3) → spec must slice into ~5-6 PRs.
+- Cross-repo ordering constraint (#2 before #4) → planner must respect dependency.
+- Expected LOC delta: ~-230 net (TwoPhaseBase −150, PuLIDMixin −80, +base class ~50, +typed error <10).

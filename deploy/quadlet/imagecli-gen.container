@@ -1,0 +1,64 @@
+[Unit]
+Description=imageCLI generation NATS worker
+Wants=factory-nats.service
+After=factory-nats.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Container]
+Image=ghcr.io/roxabi/imagecli-gen:staging
+Label=io.containers.autoupdate=registry
+ContainerName=imagecli-gen
+Network=roxabi.network
+# HuggingFace cache — bind-mount host cache so FLUX/SD3.5 weights are shared with
+# other CLIs (llmCLI, etc.) and directly inspectable on the host (~10–14 GB).
+# UserNS=keep-id:uid=1503,gid=1503 handles write permissions; no :z needed (no SELinux).
+Volume=%h/.cache/huggingface:/home/imagecli/.cache/huggingface
+# Explicit HF_HOME guards against XDG_CACHE_HOME quirks inside the container.
+Environment=HF_HOME=/home/imagecli/.cache/huggingface
+# PNG outputs (out/) — bind-mount so CLI-generated files land in ~/.roxabi/imagecli/
+# on the host, Syncthing-replicated M1<->M2 per project convention.
+# NATS satellite delivers via HttpBlobStore (no local FS write since #97).
+Volume=%h/.roxabi/imagecli:/home/imagecli/.roxabi/imagecli
+Secret=imagecli-nats-gen,type=mount,target=imagecli-nats-gen.seed,uid=1503,gid=1503,mode=0400
+# Cross-host HttpBlobStore Bearer token (#97 / ADR-067). Mount-type secret —
+# value never appears in `podman inspect --format '{{.Config.Env}}'`. Python
+# reads the file at IMAGECLI_BLOBSTORE_TOKEN_PATH.
+Secret=imagecli-blobstore-token,type=mount,target=imagecli-blobstore-token,uid=1503,gid=1503,mode=0400
+AddDevice=nvidia.com/gpu=all
+# UID 1503 fixed in image; anchor mapping so the mounted nkey (uid=1503) is readable.
+UserNS=keep-id:uid=1503,gid=1503
+# Connect to factory-nats on M1 over the tailnet (imageCLI runs on M2/image-worker;
+# `factory-nats` container-DNS only resolves on M1's roxabi.network). Mirrors the
+# blobstore/OTEL endpoints below (roxabituwer:*) and llmCLI's M2 worker (#audit-2026-07-01).
+Environment=NATS_URL=nats://roxabituwer:4222
+Environment=NATS_NKEY_SEED_PATH=/run/secrets/imagecli-nats-gen.seed
+Environment=IMAGECLI_BLOBSTORE_TOKEN_PATH=/run/secrets/imagecli-blobstore-token
+Environment=IMAGECLI_BLOBSTORE_URL=http://roxabituwer:8449
+# PuLID/InsightFace weights — read-only bind-mount (data managed by operator, not image).
+# Host data move ~/ComfyUI/models/pulid -> ~/.roxabi/imagecli/weights/ is Phase 1D operator action.
+Volume=%h/.roxabi/imagecli/weights:/home/imagecli/.roxabi/imagecli/weights:ro,Z
+# Engine override without rebuilding the image (see Dockerfile.gen CMD).
+Environment=IMAGECLI_ENGINE=flux2-klein
+Environment=ROXABI_OTEL_ENABLED=1
+# Cross-host: M₂ satellites reach M₁ factory-otel via tailnet (factory-otel DNS is M₁-only).
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://roxabituwer:4317
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+# SSoT: factory hub OTel ingest token (sync from M₁ before enabling export).
+Volume=%h/.roxabi/factory/secrets/factory_otel_token:/run/secrets/factory_otel_token:ro,z
+Environment=FACTORY_OTEL_TOKEN_PATH=/run/secrets/factory_otel_token
+# Podman Quadlet ≤5.7.0 strips a trailing double-quote from HealthCmd → unterminated shell
+# string → false-unhealthy even when the service is running fine. End with a non-quote token.
+HealthCmd=pgrep -f "imagecli nats-serve" || exit 1
+HealthInterval=30s
+# Grace for diffusion model cold-load (FLUX/SD3.5 weights + CUDA init) before health failures count.
+HealthStartPeriod=120s
+NoNewPrivileges=true
+DropCapability=all
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
