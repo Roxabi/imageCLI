@@ -30,7 +30,7 @@ charter="$HOME/.roxabi-vault/config/visual-charter.json"
 
 ## Phase 2 — Creative Brief Intake
 
-Present decisions via protocol: read `${CLAUDE_PLUGIN_ROOT}/../shared/references/decision-presentation.md` (Pattern A).
+Present choices and wait for user reply.
 
 ### 2.1 Identity
 Confirm: **Name** (wordmark), **Tagline**, **Essence** (one sentence: what it is + how it should feel).
@@ -74,7 +74,7 @@ mkdir -p "$HOME/.roxabi-vault/config/logo-briefs"
 ```
 5. Write to `BD/<name>-logo.html`; `xdg-open` it.
 6. Tell user: "Preview is open. Use the gear icon (top-right) to tweak colors, sizes, and animation in real time."
-7. → DP(A) **Export GIF+PNG** (Phase 6) | **Tweak** (Phase 5) | **Start over** (Phase 2).
+7. → present choice **Export GIF+PNG** (Phase 6) | **Tweak** (Phase 5) | **Start over** (Phase 2).
 
 ## Phase 5 — Iterate
 

@@ -35,11 +35,11 @@ nvidia-smi --query-gpu=name,memory.free,memory.total --format=csv,noheader 2>/de
 nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader,nounits 2>/dev/null
 ```
 
-¬GPU ∨ ¬venv → abort with instructions. GPU conflict found → → DP(A) **Stop conflicting process first** | **Proceed anyway** Do NOT auto-kill.
+¬GPU ∨ ¬venv → abort with instructions. GPU conflict found → present choice **Stop conflicting process first** | **Proceed anyway** Do NOT auto-kill.
 
 ## Phase 2 — Concept Directions
 
-Propose 5 directions (visual style + metaphor) via protocol: read `${CLAUDE_PLUGIN_ROOT}/../shared/references/decision-presentation.md` (Pattern C). Ask to confirm/modify/add. Aim: 4-5 directions × ~5 variations = 20-25 concepts.
+Propose 5 directions (visual style + metaphor) as a numbered multi-select. Ask to confirm/modify/add. Aim: 4-5 directions × ~5 variations = 20-25 concepts.
 
 ## Phase 3 — Prompt Engineering
 
@@ -82,7 +82,7 @@ Model loads once, generates sequentially (~20s each, int8 quantization). Failure
 
 ## Phase 6 — Pick & Iterate
 
-→ DP(A) **Pick favorites** (by number) | **Generate more variations** | **Done**
+→ present choice **Pick favorites** (by number) | **Generate more variations** | **Done**
 
 - Favorites + variations → new prompts (different angles/lighting/colors/materials) → re-run batch (existing PNGs skipped) → regenerate gallery.
 - Done → summarize favorites; suggest: `/logo-design` for animated SVG, `/logo-explore-svg` for shape variations.
