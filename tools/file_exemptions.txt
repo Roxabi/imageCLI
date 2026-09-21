@@ -1,3 +1,7 @@
 # Exemptions — file_length gate
-# Format: <path> <issue-url>  (single-space separator)
-# Each entry MUST reference a tracking issue so the exemption is recoverable.
+# Format the script parses (check_lib.sh): <path>  # <N> lines — <issue> <why>
+# $2 must be "#". A URL in $2 is a cap-less bypass; a URL plus a cap fails
+# assert_exempt_no_spaces (NF>2 and $2 does not start with #).
+# The declared count is a local cap (SLOC when QG_FILE_METRIC=sloc); exceeding it fails.
+# Each entry MUST reference a tracking issue.
+# Currently empty: under SLOC@300 no src file qualifies (max 264, src/imagecli/nats/adapter.py).

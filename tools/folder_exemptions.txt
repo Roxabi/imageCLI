@@ -1,3 +1,7 @@
 # Exemptions — folder_size gate
-# Format: <path> <issue-url>  (single-space separator)
-# Each entry MUST reference a tracking issue so the exemption is recoverable.
+# Format the script parses (check_lib.sh): <path>  # <N> files — <issue> <why>
+# $2 must be "#". A URL in $2 is a cap-less bypass; a URL plus a cap fails
+# assert_exempt_no_spaces (NF>2 and $2 does not start with #).
+# The declared count is a local cap; exceeding it fails the gate.
+# Each entry MUST reference a tracking issue.
+src/imagecli  # 13 files — https://github.com/Roxabi/imageCLI/issues/130 13 modules at hook go-live; split before adding a 14th

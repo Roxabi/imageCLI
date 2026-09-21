@@ -56,6 +56,8 @@ SAFE_LICENSES: set[str] = {
     "Apache 2.0",
     "Apache-2.0",
     "Apache License, Version 2.0",
+    # Apache-2.0 plus the LLVM exception stays permissive (llvmlite).
+    "Apache-2.0 WITH LLVM-exception",
     # ISC
     "ISC",
     "ISC License",
@@ -123,9 +125,30 @@ def _split_compound_spdx(license_str: str) -> list[str]:
     Handles:
       - SPDX AND/OR operators: 'Apache-2.0 AND MIT', 'Apache-2.0 OR BSD-2-Clause'
       - pip-licenses semicolon separator: 'Apache Software License; MIT License'
+
+    WITH is not a splitter. A known permissive exception is stripped by
+    `_without_permissive_exceptions` so 'Apache-2.0 WITH LLVM-exception'
+    is judged as Apache-2.0, not as an unknown license.
     """
     parts = re.split(r"\s+AND\s+|\s+OR\s+|;\s*", license_str)
     return [p.strip() for p in parts if p.strip()]
+
+
+# Exceptions that do not add a copyleft obligation on top of a safe base license.
+_PERMISSIVE_EXCEPTIONS = ("LLVM-exception",)
+
+
+def _without_permissive_exceptions(part: str) -> str:
+    stripped = part.strip()
+    for exc in _PERMISSIVE_EXCEPTIONS:
+        suffix = f" WITH {exc}"
+        if stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)].strip()
+    return stripped
+
+
+def _part_is_safe(part: str) -> bool:
+    return part in SAFE_LICENSES or _without_permissive_exceptions(part) in SAFE_LICENSES
 
 
 def is_compliant(name: str, license_str: str, policy: dict) -> bool:
@@ -134,12 +157,12 @@ def is_compliant(name: str, license_str: str, policy: dict) -> bool:
         return True  # explicitly overridden
     if name in policy.get("allowlist", []):
         return True  # explicitly allowlisted by name
-    if license_str in SAFE_LICENSES:
-        return True  # direct match
+    if _part_is_safe(license_str):
+        return True  # direct match, including a single WITH exception
     # Compound SPDX: safe if all component licenses are individually safe
     parts = _split_compound_spdx(license_str)
     if len(parts) > 1:
-        return all(p in SAFE_LICENSES for p in parts)
+        return all(_part_is_safe(p) for p in parts)
     return False
 
 

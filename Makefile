@@ -2,6 +2,7 @@
 
 install:
 	uv sync
+	./tools/install-hooks.sh
 
 lint:
 	uv run ruff check .
